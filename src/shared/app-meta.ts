@@ -9,5 +9,5 @@ export const APP_NAME = name;
 export const APP_VERSION = version;
 export const APP_DESCRIPTION = 'Drop anything. Understand it. A privacy-first, read-only digital-object analyzer.';
 export const APP_LICENSE = 'MIT';
-// TODO(release): set the real repository URL before the public release.
-export const APP_REPOSITORY_URL = '';
+// Injected at build time from package.json `repository.url` (see vite.config.js).
+export const APP_REPOSITORY_URL = typeof __APP_REPOSITORY_URL__ !== 'undefined' ? __APP_REPOSITORY_URL__ : '';

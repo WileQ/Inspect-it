@@ -63,8 +63,28 @@ export async function runProductionTests() {
     assert.ok(main.includes('./autostart.cjs'), 'main.cjs uses the Linux autostart module');
     assert.ok(exists('electron/autostart.cjs'), 'Linux autostart module exists');
     assert.ok(exists('.github/workflows/build.yml'), 'CI workflow exists for cross-platform builds');
+    assert.ok(exists('docs/RELEASING.md'), 'release documentation exists');
     const workflow = read('.github/workflows/build.yml');
     assert.ok(workflow.includes('windows-latest') && workflow.includes('macos-latest') && workflow.includes('ubuntu-latest'), 'CI matrix covers Windows, macOS, and Linux');
+    assert.ok(workflow.includes("run: npm run dist:win"), 'CI builds the Windows installer');
+    assert.ok(workflow.includes("run: npm run dist:mac") || workflow.includes('dist:mac'), 'CI builds the macOS app');
+    assert.ok(workflow.includes("run: npm run dist:linux"), 'CI builds the Linux packages');
+    assert.ok(workflow.includes('refs/tags/v'), 'CI releases on version tags');
+    assert.ok(workflow.includes('softprops/action-gh-release'), 'CI publishes a GitHub Release');
+    assert.ok(workflow.includes('APPLE_APP_SPECIFIC_PASSWORD') && workflow.includes('APPLE_TEAM_ID'), 'CI wires Apple notarization credentials');
+    const releasing = read('docs/RELEASING.md');
+    assert.ok(releasing.includes('Developer ID Application'), 'release docs cover the Apple certificate');
+    assert.ok(releasing.includes('CSC_LINK'), 'release docs cover CI signing secrets');
+    assert.ok(releasing.includes('APPLE_APP_SPECIFIC_PASSWORD'), 'release docs cover notarization credentials');
+  }
+
+  // --- Package release metadata ---------------------------------------------
+  {
+    const pkg = JSON.parse(read('package.json'));
+    assert.ok(pkg.repository?.url, 'package.json repository.url is set (About link + release source)');
+    assert.ok(pkg.homepage, 'package.json homepage is set');
+    assert.equal(pkg.build.mac.hardenedRuntime, true, 'macOS hardened runtime enabled');
+    assert.equal(pkg.build.mac.gatekeeperAssess, false, 'macOS gatekeeper assessment disabled (notarize handles it)');
   }
 
   // --- Content Security Policy ----------------------------------------------

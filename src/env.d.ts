@@ -3,6 +3,7 @@
 declare global {
   var __APP_VERSION__: string;
   var __APP_NAME__: string;
+  var __APP_REPOSITORY_URL__: string;
 
   interface Window {
     inspectThisDesktop?: {

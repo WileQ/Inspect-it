@@ -90,7 +90,9 @@
         "zip"
       ],
       "icon": "build/icon.png",
-      "category": "public.app-category.utilities"
+      "category": "public.app-category.utilities",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false
     },
     "linux": {
       "target": [
@@ -103,5 +105,10 @@
       "maintainer": "Inspect This contributors",
       "executableName": "inspect-this"
     }
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/inspect-this/inspect-this"
+  },
+  "homepage": "https://github.com/inspect-this/inspect-this"
 }

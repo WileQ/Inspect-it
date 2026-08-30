@@ -160,7 +160,15 @@ npm run icons        # regenerate app/tray icons (scripts/generate-icons.mjs)
 > Each installer must be built on its own OS: macOS packages require macOS
 > (code signing/notarization needs a Mac and Apple credentials), Linux packages
 > are produced on Linux, and Windows packages on Windows. The CI workflow
-> (`.github/workflows/build.yml`) builds and tests all three on every push.
+> (`.github/workflows/build.yml`) builds and tests all three on every push, and
+> publishing a GitHub Release with all installers is just a tag away:
+>
+> ```bash
+> git tag v1.0.0 && git push origin v1.0.0
+> ```
+>
+> See [docs/RELEASING.md](docs/RELEASING.md) for the full version/tag flow and
+> the macOS signing/notarization setup.
 
 
 **Production builds are self-contained**: the renderer is bundled into the Electron app (`dist/`), so the packaged application does not need Vite, localhost, Node, or npm at runtime.
