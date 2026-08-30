@@ -1,0 +1,26 @@
+# Dependencies
+/node_modules/
+
+# Build output (renderer bundle + packaged apps)
+/dist/
+/release/
+
+# Local tooling / machine-specific artifacts
+/inspect_it_venv/
+/codex-deepseek-bridge/
+/codex-deepseek-bridge-win-x64.exe
+/.agents/
+/.codex/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/
+.idea/

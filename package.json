@@ -1,0 +1,105 @@
+{
+  "name": "inspect-this",
+  "private": false,
+  "version": "1.0.0",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:renderer": "vite --configLoader runner --host 127.0.0.1 --port 5173",
+    "build": "vite build --configLoader runner",
+    "preview": "vite preview --host 127.0.0.1 --port 4173",
+    "test": "node --experimental-strip-types --experimental-specifier-resolution=node tests/run-tests.mjs",
+    "test:watch": "node --experimental-strip-types --experimental-specifier-resolution=node tests/run-tests.mjs",
+    "icons": "node scripts/generate-icons.mjs",
+    "package": "electron-builder --dir",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win nsis",
+    "prepackage": "npm run build",
+    "predist": "npm run build"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.11.0",
+    "fflate": "^0.8.3",
+    "jszip": "^3.10.1",
+    "pdfjs-dist": "^6.2.108",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "sql.js": "^1.14.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.29",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.5.2",
+    "electron": "^33.2.0",
+    "electron-builder": "^26.15.3",
+    "typescript": "^5.8.3",
+    "vite": "^6.2.1",
+    "vitest": "^2.1.9"
+  },
+  "productName": "Inspect This",
+  "description": "Drop anything. Understand it. A privacy-first, read-only digital-object analyzer that lives in a floating bubble on your desktop.",
+  "author": "Inspect This contributors",
+  "license": "MIT",
+  "build": {
+    "appId": "com.inspectthis.desktop",
+    "productName": "Inspect This",
+    "copyright": "Copyright (c) 2026 Inspect This contributors",
+    "asar": true,
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**",
+      "electron/**",
+      "build/tray.png",
+      "package.json",
+      "!**/*.map",
+      "!node_modules/**"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Inspect This",
+      "artifactName": "Inspect-This-${version}-Windows-${arch}.${ext}",
+      "deleteAppDataOnUninstall": false
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "category": "public.app-category.utilities"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "icon": "build/icon.png",
+      "category": "Utility",
+      "synopsis": "Privacy-first digital-object analyzer"
+    }
+  }
+}

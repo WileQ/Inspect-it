@@ -1,0 +1,10 @@
+{
+  "project": {
+    "name": "Inspect This",
+    "versions": [1, 2, 3],
+    "meta": {
+      "active": true,
+      "owners": ["qa", "eng"]
+    }
+  }
+}
