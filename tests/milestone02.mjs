@@ -1,4 +1,4 @@
-// Milestone 02 analyzer tests. Uses real, in-memory fixtures (no network).
+﻿// Milestone 02 analyzer tests. Uses real, in-memory fixtures (no network).
 import assert from 'node:assert/strict';
 import { analyzeItem } from '../src/shared/analyzers.ts';
 import {
@@ -8,11 +8,14 @@ import {
   makeGzipTarItem,
   makeGzipZipItem,
   makePdfItem,
+  makeHexPdfItem,
   makeInvalidPdfItem,
   makeDocxItem,
   makePptxItem,
   makeXlsxItem,
   makeLegacyXlsItem,
+  makeEmlItem,
+  makeEpubItem,
   makeSqliteItem,
   makeInvalidSqliteItem,
   makeWavItem,
@@ -57,16 +60,25 @@ export async function runMilestoneTwoTests() {
     const result = await analyzeItem(await makePdfItem(), { signal });
     assert.equal(result.analyzerId, 'pdf');
     assert.equal(hasEvidence(result, 'Pages', '2'), true, 'PDF page count');
+    assert.equal(hasEvidence(result, 'Words', '5'), true, 'PDF word count is accurate');
+    assert.ok(Number(hasEvidence(result, 'Characters') ? result.evidence.find((e) => e.label === 'Characters').value : 0) > 0, 'PDF character count present');
     assert.ok(Number(hasEvidence(result, 'Text snippets') ? result.evidence.find((e) => e.label === 'Text snippets').value : 0) > 0, 'PDF text extracted from streams');
     assert.equal(hasEvidence(result, 'Title', 'Sample Report'), true, 'PDF metadata title');
     assert.equal(hasEvidence(result, 'Author', 'Inspect This'), true, 'PDF metadata author');
     assert.equal(sectionHas(result, 'pdf-links', (item) => item.value.includes('https://example.com/report')), true, 'PDF links');
+    assert.equal(sectionHas(result, 'pdf-text', (item) => item.value.includes('Hello PDF')), true, 'PDF per-page text extracted');
+  }
+  {
+    const result = await analyzeItem(await makeHexPdfItem(), { signal });
+    assert.equal(result.analyzerId, 'pdf');
+    assert.equal(hasEvidence(result, 'Words', '2'), true, 'PDF hex-string words counted correctly');
+    assert.equal(hasEvidence(result, 'Title', 'Hex Report'), true, 'PDF hex fixture metadata title');
+    assert.equal(sectionHas(result, 'pdf-text', (item) => item.value.includes('Hello')), true, 'PDF hex-string text decoded');
   }
   {
     const result = await analyzeItem(makeInvalidPdfItem(), { signal });
     assert.equal(hasFinding(result, 'pdf-invalid'), true, 'Invalid PDF handled gracefully');
   }
-
   // --- DOCX ---
   {
     const result = await analyzeItem(await makeDocxItem(), { signal });
@@ -113,6 +125,30 @@ export async function runMilestoneTwoTests() {
     assert.equal(result.analyzerId, 'xls', 'Legacy XLS detected without crashing');
   }
 
+  // --- EML ---
+  {
+    const result = await analyzeItem(makeEmlItem(), { signal });
+    assert.equal(result.analyzerId, 'email');
+    assert.equal(hasEvidence(result, 'Subject', 'Hello world'), true, 'EML subject decoded from encoded words');
+    assert.equal(hasEvidence(result, 'From', 'Alice <alice@example.com>'), true, 'EML sender');
+    assert.equal(hasEvidence(result, 'Attachments', '1'), true, 'EML attachment count');
+    assert.equal(hasEvidence(result, 'Links', '1'), true, 'EML link count');
+    assert.equal(hasEvidence(result, 'DKIM signature', 'Present'), true, 'EML DKIM presence');
+    assert.equal(hasEvidence(result, 'SPF record', 'Present'), true, 'EML SPF presence');
+    assert.equal(sectionHas(result, 'email-links', (item) => item.value.includes('https://example.com/report')), true, 'EML links section');
+  }
+
+  // --- EPUB ---
+  {
+    const result = await analyzeItem(await makeEpubItem(), { signal });
+    assert.equal(result.analyzerId, 'epub');
+    assert.equal(hasEvidence(result, 'Title', 'Sample Ebook'), true, 'EPUB title');
+    assert.equal(hasEvidence(result, 'Author', 'Jane Author'), true, 'EPUB author');
+    assert.equal(hasEvidence(result, 'Chapters', '2'), true, 'EPUB chapter count');
+    assert.ok(Number(hasEvidence(result, 'Words') ? result.evidence.find((e) => e.label === 'Words').value : 0) > 0, 'EPUB word count extracted from spine');
+    assert.equal(hasEvidence(result, 'Images', '1'), true, 'EPUB image count');
+    assert.equal(sectionHas(result, 'epub-chapters', (item) => item.value.includes('Chapter One')), true, 'EPUB chapter titles');
+  }
   // --- ZIP ---
   {
     const result = await analyzeItem(await makeZipItem(), { signal });
@@ -368,3 +404,6 @@ export async function runMilestoneTwoTests() {
 
   console.log('Milestone 02 analyzer tests passed.');
 }
+
+
+

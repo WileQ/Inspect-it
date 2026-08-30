@@ -1285,3 +1285,98 @@ button {
   outline: 2px solid #ffb877;
   outline-offset: 1px;
 }
+
+/* Raw-content AI mode ------------------------------------------------------ */
+
+.ai-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.raw-button {
+  border: 1px solid rgba(255, 170, 80, 0.55);
+  background: rgba(120, 66, 18, 0.35);
+  color: #ffc98a;
+  border-radius: 9px;
+  padding: 7px 11px;
+  font-size: 12.5px;
+  font-weight: 700;
+  transition: transform 150ms ease, border-color 150ms ease, background 150ms ease;
+}
+
+.raw-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: rgba(255, 180, 100, 0.85);
+  background: rgba(150, 82, 22, 0.45);
+}
+
+.raw-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.danger-button {
+  border: 1px solid rgba(255, 120, 120, 0.55);
+  background: rgba(120, 34, 34, 0.5);
+  color: #ffd0d0;
+  border-radius: 9px;
+  padding: 7px 11px;
+  font-size: 12.5px;
+  font-weight: 700;
+  transition: transform 150ms ease, border-color 150ms ease, background 150ms ease;
+}
+
+.danger-button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 140, 140, 0.9);
+  background: rgba(150, 40, 40, 0.6);
+}
+
+.ai-raw-disabled {
+  font-size: 11.5px;
+  color: rgba(255, 201, 130, 0.6);
+  font-style: italic;
+}
+
+.ai-raw-confirm {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(255, 140, 90, 0.4);
+  border-radius: 12px;
+  background: rgba(110, 40, 18, 0.22);
+}
+
+.ai-raw-warning {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #ffc8a0;
+  background: rgba(255, 120, 60, 0.1);
+  border: 1px solid rgba(255, 140, 80, 0.35);
+  border-radius: 9px;
+  padding: 8px 10px;
+}
+
+.ai-raw-gate {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  margin: 4px 0;
+  border: 1px solid rgba(255, 150, 80, 0.3);
+  border-radius: 12px;
+  background: rgba(120, 60, 20, 0.12);
+}
+
+.ai-raw-badge {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #ffb877;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 170, 100, 0.4);
+}

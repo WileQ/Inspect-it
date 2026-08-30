@@ -19,10 +19,11 @@ function exists(relative) {
 const SOURCE_FILES = [
   'src/shared/analyzers.ts', 'src/shared/anomaly.ts', 'src/shared/archive.ts',
   'src/shared/code.ts', 'src/shared/dependencies.ts', 'src/shared/documents.ts',
-  'src/shared/duplicates.ts', 'src/shared/files.ts', 'src/shared/history.ts',
+  'src/shared/duplicates.ts', 'src/shared/ebook.ts', 'src/shared/email.ts',
+  'src/shared/files.ts', 'src/shared/history.ts',
   'src/shared/inspection.ts', 'src/shared/media.ts', 'src/shared/ocr.ts',
   'src/shared/relationships.ts', 'src/shared/sqlite.ts', 'src/shared/web.ts',
-  'src/shared/llm/analyze.ts', 'src/shared/llm/cache.ts', 'src/shared/llm/context.ts',
+  'src/shared/llm/analyze.ts', 'src/shared/llm/cache.ts', 'src/shared/llm/content.ts', 'src/shared/llm/context.ts',
   'src/shared/llm/payload.ts', 'src/shared/llm/provider.ts', 'src/shared/llm/transport.ts'
 ];
 

@@ -25,7 +25,9 @@ export const DEFAULT_LLM_SETTINGS: LlmSettings = {
   project: '',
   timeoutMs: 60000,
   stream: true,
-  maxContextChars: 24000
+  maxContextChars: 24000,
+  allowRawContent: false,
+  rawContentMaxChars: 20000
 };
 
 /** Convenience presets. Model names vary by provider; users edit them freely. */
@@ -54,7 +56,9 @@ export function normalizeLlmSettings(raw: unknown): LlmSettings {
     project: typeof value.project === 'string' ? value.project : '',
     timeoutMs: clampInt(value.timeoutMs, DEFAULT_LLM_SETTINGS.timeoutMs, 3000, 300000),
     stream: value.stream !== false,
-    maxContextChars: clampInt(value.maxContextChars, DEFAULT_LLM_SETTINGS.maxContextChars, 4000, 120000)
+    maxContextChars: clampInt(value.maxContextChars, DEFAULT_LLM_SETTINGS.maxContextChars, 4000, 120000),
+    allowRawContent: Boolean(value.allowRawContent),
+    rawContentMaxChars: clampInt(value.rawContentMaxChars, DEFAULT_LLM_SETTINGS.rawContentMaxChars, 2000, 120000)
   };
 }
 

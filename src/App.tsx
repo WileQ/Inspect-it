@@ -7,6 +7,7 @@ import { runInspection } from './shared/inspection.ts';
 import {
   aiCacheKeyFor,
   clearApiKey,
+  extractRawContentForAi,
   getAiCached,
   hasApiKey,
   loadLlmSettings,
@@ -45,6 +46,19 @@ function evidenceById(result: AnalysisResult): Map<string, string> {
 
 function humanizeId(id: string): string {
   return id.replace(/[-_]+/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+const EXTRACTABLE_TEXT_PATTERN =
+  /\.(txt|md|markdown|json|jsonl|csv|tsv|log|ini|toml|yaml|yml|xml|html?|eml|ts|tsx|js|jsx|mjs|cjs|py|rs|go|java|cs|cpp|cxx|c|h|hpp|php|rb|sh|bat|ps1|sql|css|scss|less|properties|env|gradle|pdf)$/i;
+
+function itemHasExtractableText(item: InspectionItem): boolean {
+  if (item.kind === 'file') {
+    return EXTRACTABLE_TEXT_PATTERN.test(item.name) || /^(dockerfile|makefile|gemfile|procfile)$/i.test(item.name);
+  }
+  if (item.kind === 'folder') {
+    return item.children.some(itemHasExtractableText);
+  }
+  return false;
 }
 
 /* ------------------------------------------------------------------ */
@@ -264,6 +278,7 @@ export default function App() {
   }, [result, aiSettings.enabled, aiSettings.baseUrl, aiSettings.model, aiSettings.maxContextChars, aiSettings.stream, aiSettings.organization, aiSettings.project]);
 
   const activeEvidence = useMemo(() => (result ? evidenceById(result) : new Map<string, string>()), [result]);
+  const rawContentAvailable = useMemo(() => (session?.target ? itemHasExtractableText(session.target) : false), [session?.target]);
 
   const isRunning = session?.status === 'running';
   const showHistory = Boolean(settings.showHistory);
@@ -405,7 +420,7 @@ export default function App() {
     setSession((current) => (current ? { ...current, status: 'cancelled', finishedAt: Date.now() } : current));
   };
 
-  const askAi = async () => {
+  const askAi = async (raw = false) => {
     if (!result) {
       return;
     }
@@ -417,13 +432,26 @@ export default function App() {
       setAiRun({ status: 'error', error: 'No API key configured. Add one in Settings -> AI.' });
       return;
     }
+    if (raw && !aiSettings.allowRawContent) {
+      setAiRun({ status: 'error', error: 'Sending raw content is disabled. Enable "Allow sending raw file content to AI" in Settings -> AI first.' });
+      return;
+    }
+    if (raw && !session?.target) {
+      setAiRun({ status: 'error', error: 'No inspected object is available to send.' });
+      return;
+    }
     aiRunRef.current?.abort();
     const controller = new AbortController();
     aiRunRef.current = controller;
     setAiRun({ status: 'running', streamText: '' });
     try {
+      let rawContent: Awaited<ReturnType<typeof extractRawContentForAi>> | undefined;
+      if (raw && session?.target) {
+        rawContent = await extractRawContentForAi([session.target], controller.signal);
+      }
       const explanation = await runAiExplanation([result], aiSettings, {
-        signal: controller.signal
+        signal: controller.signal,
+        ...(rawContent?.length ? { rawContent } : {})
       });
       setAiRun({ status: 'done', result: explanation });
     } catch (error) {
@@ -791,8 +819,10 @@ export default function App() {
           settings={aiSettings}
           keyPresent={aiKeyPresent}
           run={aiRun}
-          onAskAi={() => void askAi()}
+          onAskAi={() => void askAi(false)}
+          onAskAiRaw={() => void askAi(true)}
           onCancel={cancelAi}
+          rawContentAvailable={rawContentAvailable}
         />
       </div>
     );

@@ -1,12 +1,13 @@
 // Public API for the optional LLM interpretation layer.
 export { runAiExplanation, testAiConnection } from './analyze.ts';
 export { aiCacheKeyFor, clearAiCache, getAiCached, setAiCached } from './cache.ts';
-export { buildAiContext, DEFAULT_AI_BUDGET } from './context.ts';
-export type { AiContextBudget, BuiltAiContext } from './context.ts';
+export { buildAiContext, buildRawContentBlock, DEFAULT_AI_BUDGET } from './context.ts';
+export type { AiContextBudget, BuiltAiContext, RawContentInput } from './context.ts';
+export { extractRawContentForAi } from './content.ts';
 export { LlmError, errorKindForStatus, messageForKind, toLlmError } from './errors.ts';
 export type { LlmErrorKind } from './errors.ts';
 export { buildChatPayload, parseChatCompletionResponse, parseSseEvent, normalizeBaseUrl, chatCompletionsUrl } from './payload.ts';
-export { AI_PROMPT_VERSION, AI_SCHEMA_VERSION, AI_SYSTEM_PROMPT, buildAiUserPrompt, parseAiExplanation } from './prompt.ts';
+export { AI_PROMPT_VERSION, AI_SCHEMA_VERSION, AI_RAW_SYSTEM_PROMPT, AI_SYSTEM_PROMPT, buildAiRawUserPrompt, buildAiUserPrompt, parseAiExplanation } from './prompt.ts';
 export { OpenAICompatibleProvider, createProvider, validateLlmSettings } from './provider.ts';
 export type { LlmProvider } from './provider.ts';
 export {

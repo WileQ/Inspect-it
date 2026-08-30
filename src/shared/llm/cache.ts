@@ -12,6 +12,7 @@ import type { AnalysisResult } from '../types.ts';
 import { storageGet, storageSet } from '../storage.ts';
 import { digestHex } from '../utils.ts';
 import { AI_PROMPT_VERSION, AI_SCHEMA_VERSION } from './prompt.ts';
+import type { RawContentInput } from './context.ts';
 import type { AiExplanation, LlmSettings } from './types.ts';
 
 export const AI_CACHE_STORAGE_KEY = 'inspect-this.ai-cache';
@@ -37,10 +38,14 @@ function writeCache(cache: Record<string, AiExplanation>): void {
 }
 
 /** Compute the stable cache key for a set of local results + provider config. */
-export async function aiCacheKeyFor(results: AnalysisResult[], settings: LlmSettings): Promise<string> {
+export async function aiCacheKeyFor(results: AnalysisResult[], settings: LlmSettings, rawContent?: RawContentInput[]): Promise<string> {
   const fingerprints = results
     .map((result) => result.cacheKey || result.identity.fingerprint || result.identity.name)
     .join('|');
+  const rawFingerprint = rawContent?.length
+    ? await digestHex(new TextEncoder().encode(rawContent.map((entry) => `${entry.targetName}|${entry.note ?? ''}|${entry.content.slice(0, 4000)}`).join('\n')))
+    : '';
+  const mode = rawContent?.length ? `raw:${rawFingerprint}` : 'summary-only';
   const payload = [
     'ai',
     `p${AI_PROMPT_VERSION}`,
@@ -51,7 +56,8 @@ export async function aiCacheKeyFor(results: AnalysisResult[], settings: LlmSett
     settings.maxContextChars,
     settings.stream ? 'stream' : 'plain',
     settings.organization ?? '',
-    settings.project ?? ''
+    settings.project ?? '',
+    mode
   ].join('|');
   return digestHex(new TextEncoder().encode(payload));
 }

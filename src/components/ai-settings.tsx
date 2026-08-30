@@ -30,6 +30,10 @@ export function AiSettingsSection(props: AiSettingsSectionProps) {
     if (Number.isFinite(value)) onChange({ maxContextChars: Math.min(120000, Math.max(4000, Math.round(value))) });
   };
 
+  const setRawContentMaxChars = (value: number) => {
+    if (Number.isFinite(value)) onChange({ rawContentMaxChars: Math.min(120000, Math.max(2000, Math.round(value))) });
+  };
+
   return (
     <div className="ai-settings">
       <div className="ai-settings-head">
@@ -154,6 +158,39 @@ export function AiSettingsSection(props: AiSettingsSectionProps) {
             <span>Auto-analyze with AI after local analysis</span>
             <input type="checkbox" checked={settings.autoRun} onChange={() => onChange({ autoRun: !settings.autoRun })} />
           </label>
+          <div className="ai-raw-gate">
+            <div className="ai-settings-head">
+              <span className="ai-raw-badge">RAW CONTENT</span>
+              <span className={`ai-toggle-badge ${settings.allowRawContent ? 'enabled' : ''}`}>
+                {settings.allowRawContent ? 'Allowed' : 'Off'}
+              </span>
+            </div>
+            <label className="setting-row">
+              <span>Allow sending raw file content to AI</span>
+              <input
+                type="checkbox"
+                checked={settings.allowRawContent}
+                onChange={() => onChange({ allowRawContent: !settings.allowRawContent })}
+              />
+            </label>
+            <p className="ai-privacy-note ai-raw-warning">
+              &#9888;&#65039; Sending raw content transmits the <strong>actual text</strong> of your files
+              (documents, code, logs, emails, spreadsheet excerpts, PDF text) to the configured provider. This may
+              include sensitive or personal data. It is <strong>off by default</strong>, and even when allowed every
+              inspection asks for explicit confirmation before anything is sent. Auto-analyze never sends raw content.
+            </p>
+            <label className="setting-row">
+              <span>Raw content budget (chars per request)</span>
+              <input
+                type="number"
+                min={2000}
+                max={120000}
+                step={1000}
+                value={settings.rawContentMaxChars}
+                onChange={(event) => setRawContentMaxChars(Number(event.currentTarget.value))}
+              />
+            </label>
+          </div>
           <div className="ai-test-row">
             <button type="button" className="ghost-button" onClick={onTest} disabled={testing}>
               {testing ? 'Testing…' : 'Test connection'}
@@ -165,7 +202,7 @@ export function AiSettingsSection(props: AiSettingsSectionProps) {
             ) : null}
           </div>
           <p className="ai-privacy-note">
-            Privacy: AI receives selected analysis results (facts, findings, statistics, evidence) — never your files by default. Nothing is sent until you click “Ask AI” (or enable auto-analyze).
+            Privacy: AI receives selected analysis results (facts, findings, statistics, evidence) — never your files by default. Raw content is only ever sent when you explicitly enable it above AND confirm on each inspection. Nothing is sent until you click “Ask AI” (or enable auto-analyze, which is summary-only).
           </p>
         </>
       ) : (

@@ -91,6 +91,62 @@ function push(lines: PendingLine[], priority: number, order: number, text: strin
   if (text) lines.push({ priority, order, text });
 }
 
+export interface RawContentInput {
+  targetName: string;
+  content: string;
+  note?: string;
+}
+
+export interface BuiltRawContent {
+  text: string;
+  chars: number;
+  truncated: boolean;
+  includedObjects: number;
+}
+
+function clipRaw(value: string, max: number): string {
+  const text = String(value ?? '').replace(/\r\n/g, '\n');
+  if (text.length <= max) return text;
+  const keep = Math.max(1, max - 80);
+  return `${text.slice(0, keep)}\n\n[... content truncated at ${max} characters ...]`;
+}
+
+/**
+ * Build the bounded raw-content block for AI investigation mode. Each object's
+ * content is clipped to a fair share of the total budget so the request never
+ * exceeds `maxChars`. This block is ONLY produced when the user explicitly
+ * opts into raw-content analysis.
+ */
+export function buildRawContentBlock(inputs: RawContentInput[], maxChars: number): BuiltRawContent {
+  const list = inputs.filter((input) => input && input.targetName);
+  if (!list.length) return { text: '', chars: 0, truncated: false, includedObjects: 0 };
+  const perObject = Math.max(200, Math.floor(maxChars / list.length));
+  const blocks: string[] = [];
+  let used = 0;
+  let truncated = false;
+  let included = 0;
+  for (const input of list) {
+    const body = clipRaw(input.content, perObject);
+    const chars = body.length;
+    const wasTruncated = input.content.length > perObject;
+    if (wasTruncated) truncated = true;
+    const parts: string[] = [];
+    parts.push(`[RAW CONTENT] ${input.targetName} (${chars} chars${wasTruncated ? ', truncated' : ''})`);
+    if (body.trim()) {
+      parts.push('<content>');
+      parts.push(body);
+      parts.push('</content>');
+      included += 1;
+    } else if (input.note) {
+      parts.push(`(no text included - ${input.note})`);
+    }
+    const block = `${parts.join('\n')}\n`;
+    blocks.push(block);
+    used += block.length;
+  }
+  return { text: blocks.join(''), chars: used, truncated, includedObjects: included };
+}
+
 /** Build the bounded context text from one or more local analysis results. */
 export function buildAiContext(results: AnalysisResult[], budget: Partial<AiContextBudget> = {}): BuiltAiContext {
   const cfg: AiContextBudget = { ...DEFAULT_AI_BUDGET, ...budget };

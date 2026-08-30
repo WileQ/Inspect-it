@@ -1,4 +1,4 @@
-// Fixture generators for the Inspect This test suite.
+﻿// Fixture generators for the Inspect This test suite.
 // Fixtures are real files (or structurally valid containers) generated in
 // memory so the repository stays small and CI needs no network access.
 import JSZip from 'jszip';
@@ -157,9 +157,100 @@ export async function makePdfItem() {
   for (let index = 1; index <= objects.length; index += 1) {
     xref += offsets[index].toString().padStart(10, '0') + ' 00000 n \n';
   }
-  xref += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R /Info 8 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
+  xref += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R /Info 8 0 R /ID [<28F7E8A2B3C4D5E6F7A8B9C0D1E2F3A4> <28F7E8A2B3C4D5E6F7A8B9C0D1E2F3A4>] >>\nstartxref\n${xrefStart}\n%%EOF`;
   parts.push(latin1Bytes(xref));
   return toItem('sample.pdf', concatBytes(parts), 'application/pdf');
+}
+
+export async function makeHexPdfItem() {
+  const enc = new TextEncoder();
+  // Hex-encoded string (<48656C6C6F> = "Hello") plus a literal string on a new
+  // line, exercising both the pdfjs path and the regex fallback extractor.
+  const page1 = zlibSync(enc.encode('BT /F1 12 Tf 72 720 Td <48656C6C6F> Tj 0 -18 Td (World) Tj ET'));
+  const toLatin1 = (value) => [...value].map((char) => String.fromCharCode(char & 0xff)).join('');
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>',
+    `<< /Length ${page1.length} /Filter /FlateDecode >>\nstream\n${toLatin1(page1)}\nendstream`,
+    '<< /Title (Hex Report) /Author (Fixture) >>'
+  ];
+  const parts = [latin1Bytes('%PDF-1.4\n')];
+  const offsets = [0];
+  objects.forEach((obj, index) => {
+    offsets.push(parts.reduce((acc, part) => acc + part.length, 0));
+    parts.push(latin1Bytes(`${index + 1} 0 obj\n${obj}\nendobj\n`));
+  });
+  const xrefStart = parts.reduce((acc, part) => acc + part.length, 0);
+  let xref = `xref\n0 ${objects.length + 1}\n`;
+  xref += '0000000000 65535 f \n';
+  for (let index = 1; index <= objects.length; index += 1) {
+    xref += offsets[index].toString().padStart(10, '0') + ' 00000 n \n';
+  }
+  xref += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R /Info 5 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
+  parts.push(latin1Bytes(xref));
+  return toItem('hex.pdf', concatBytes(parts), 'application/pdf');
+}
+// Minimal JPEG: SOI + APP1/Exif + SOF0 (so the header parser sees dimensions)
+// + EOI. Used to exercise EXIF extraction without shipping a large binary.
+export function makeExifJpegItem(name = 'photo.jpg') {
+  const tiff = [];
+  const push8 = (value) => tiff.push(value & 0xff);
+  const push16 = (value) => tiff.push(value & 0xff, (value >> 8) & 0xff);
+  const push32 = (value) => tiff.push(value & 0xff, (value >> 8) & 0xff, (value >> 16) & 0xff, (value >>> 24) & 0xff);
+  const ascii = (value) => [...value].map((char) => char.charCodeAt(0));
+  // TIFF header: little-endian ("II"), magic 42, IFD0 at offset 8.
+  push8(0x49); push8(0x49); push16(0x2a); push32(8);
+  const ifd0Start = tiff.length; // 8
+  push16(4); // IFD0 entry count
+  const make = ascii('Test\0');
+  const model = ascii('Camera\0');
+  const dateTime = ascii('2023:01:02 03:04:05\0');
+  // IFD0 size = count(2) + 4 entries * 12 + next(4) = 54 bytes.
+  const dataStart = ifd0Start + 54;
+  const makeOffset = dataStart;
+  const modelOffset = makeOffset + make.length;
+  const dateTimeOffset = modelOffset + model.length;
+  const gpsIfdOffset = dateTimeOffset + dateTime.length;
+  const entry = (tag, type, count, value, inline) => {
+    push16(tag); push16(type); push32(count);
+    if (inline) {
+      for (let i = 0; i < 4; i += 1) push8(value[i] ?? 0);
+    } else {
+      push32(value);
+    }
+  };
+  entry(0x010f, 2, make.length, makeOffset, false);    // Make
+  entry(0x0110, 2, model.length, modelOffset, false);  // Model
+  entry(0x0132, 2, dateTime.length, dateTimeOffset, false); // DateTime
+  entry(0x8825, 4, 1, gpsIfdOffset, false);            // GPS IFD pointer
+  push32(0); // next IFD
+  for (const value of make) push8(value);
+  for (const value of model) push8(value);
+  for (const value of dateTime) push8(value);
+  if (tiff.length % 2 !== 0) push8(0);
+  // GPS IFD: LatRef, Lat, LonRef, Lon.
+  const gpsDataStart = gpsIfdOffset + 2 + 4 * 12 + 4;
+  const latDataOffset = gpsDataStart;
+  const lonDataOffset = gpsDataStart + 24;
+  push16(4);
+  entry(0x0001, 2, 2, [78, 0, 0, 0], true); // 'N'
+  entry(0x0002, 5, 3, latDataOffset, false);
+  entry(0x0003, 2, 2, [69, 0, 0, 0], true); // 'E'
+  entry(0x0004, 5, 3, lonDataOffset, false);
+  push32(0); // next IFD
+  // Rationals: latitude 52 13 47, longitude 21 0 44 (degrees minutes seconds).
+  for (const numerator of [52, 13, 47, 21, 0, 44]) {
+    push32(numerator);
+    push32(1);
+  }
+  // JPEG: SOI + APP1/Exif + SOF0 (1x1 so the header parser sees dimensions) + EOI.
+  const exifHeader = ascii('Exif\0\0');
+  const app1Length = 2 + exifHeader.length + tiff.length;
+  const out = [0xff, 0xd8, 0xff, 0xe1, (app1Length >> 8) & 0xff, app1Length & 0xff, ...exifHeader, ...tiff];
+  out.push(0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x01, 0x00, 0x01, 0x03, 0x01, 0x11, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00);
+  out.push(0xff, 0xd9);
+  return toItem(name, Uint8Array.from(out), 'image/jpeg');
 }
 
 export function makeInvalidPdfItem() {
@@ -274,6 +365,54 @@ export async function makeXlsxItem() {
   zip.file('docProps/core.xml', coreProps('Sales Workbook', 'Carol'));
   const bytes = await zip.generateAsync({ type: 'uint8array' });
   return toItem('sample.xlsx', bytes, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+}
+
+export function makeEmlItem() {
+  const eml = [
+    'From: Alice <alice@example.com>',
+    'To: Bob <bob@example.org>',
+    'Cc: Carol <carol@example.net>',
+    'Subject: =?utf-8?B?SGVsbG8gd29ybGQ=?=',
+    'Date: Mon, 12 Aug 2024 10:00:00 +0200',
+    'Message-ID: <abc123@example.com>',
+    'Reply-To: Alice <alice@example.com>',
+    'Return-Path: <alice@example.com>',
+    'DKIM-Signature: v=1; a=rsa-sha256; d=example.com',
+    'Received-SPF: pass (example.com: domain of alice@example.com)',
+    'Content-Type: multipart/mixed; boundary="BOUNDARY123"',
+    'MIME-Version: 1.0',
+    '',
+    '--BOUNDARY123',
+    'Content-Type: text/plain; charset="utf-8"',
+    '',
+    'Hello Bob,',
+    'Please find the report attached.',
+    '--BOUNDARY123',
+    'Content-Type: text/html; charset="utf-8"',
+    '',
+    '<html><body><p>Hello Bob,</p><a href="https://example.com/report">Report</a></body></html>',
+    '--BOUNDARY123',
+    'Content-Type: application/pdf; name="report.pdf"',
+    'Content-Disposition: attachment; filename="report.pdf"',
+    '',
+    '%PDF-1.4 fake attachment bytes',
+    '--BOUNDARY123--',
+    ''
+  ].join('\r\n');
+  return toItem('mail.eml', new TextEncoder().encode(eml), 'message/rfc822');
+}
+
+export async function makeEpubItem() {
+  const zip = new JSZip();
+  zip.file('mimetype', 'application/epub+zip');
+  zip.file('META-INF/container.xml', '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>');
+  zip.file('OEBPS/content.opf', '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Sample Ebook</dc:title><dc:creator>Jane Author</dc:creator><dc:language>en</dc:language><dc:identifier id="bookid">urn:isbn:1234567890</dc:identifier></metadata><manifest><item id="chap1" href="chap1.xhtml" media-type="application/xhtml+xml"/><item id="chap2" href="chap2.xhtml" media-type="application/xhtml+xml"/><item id="cover" href="cover.png" media-type="image/png"/><item id="css" href="style.css" media-type="text/css"/></manifest><spine><itemref idref="chap1"/><itemref idref="chap2"/></spine></package>');
+  zip.file('OEBPS/chap1.xhtml', '<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter One</title></head><body><p>Once upon a time there was a brave knight.</p></body></html>');
+  zip.file('OEBPS/chap2.xhtml', '<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter Two</title></head><body><p>The dragon slept beneath the mountain.</p></body></html>');
+  zip.file('OEBPS/cover.png', PNG_BYTES);
+  zip.file('OEBPS/style.css', 'body { font-family: serif; }');
+  const bytes = await zip.generateAsync({ type: 'uint8array' });
+  return toItem('book.epub', bytes, 'application/epub+zip');
 }
 
 export function makeLegacyXlsItem() {
@@ -809,6 +948,37 @@ function downscale(rgba, width, height, target) {
   return out;
 }
 
+export function makeTextLikePngItem(name = 'document.png') {
+  // White background with rows of dark "text line" strokes so pixel analysis
+  // classifies it as document/screenshot-like (high contrast, edge-rich).
+  const width = 480;
+  const height = 160;
+  const rgba = new Uint8ClampedArray(width * height * 4);
+  rgba.fill(255); // white background
+  const rows = 8;
+  const gap = Math.floor(height / (rows + 1));
+  for (let row = 1; row <= rows; row += 1) {
+    const baseline = row * gap;
+    const lineHeight = 4;
+    const segments = 3 + (row % 3);
+    for (let segment = 0; segment < segments; segment += 1) {
+      const startX = 24 + segment * 140;
+      const length = 90 + (segment % 2) * 40;
+      for (let y = baseline; y < baseline + lineHeight; y += 1) {
+        for (let x = startX; x < startX + length; x += 1) {
+          if (x < width && y < height) {
+            const index = (y * width + x) * 4;
+            rgba[index] = 20;
+            rgba[index + 1] = 20;
+            rgba[index + 2] = 20;
+          }
+        }
+      }
+    }
+  }
+  return toItem(name, encodePng(width, height, rgba), 'image/png');
+}
+
 export function makePatternPngResizedItem(name = 'pattern-b.png', seed = 1) {
   // 9x9 matches the dHash grid, so resizing is a near-identity operation.
   const original = makePattern(16, seed);
@@ -953,3 +1123,5 @@ export function makeMultiSelectionFolder() {
     ]
   };
 }
+
+

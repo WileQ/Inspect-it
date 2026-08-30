@@ -1,6 +1,8 @@
 import JSZip from 'jszip';
-import { unzlibSync } from 'fflate';
 import { isOcrAvailable } from './ocr.ts';
+import { extractPdfMetadataFromRaw, extractPdfStreamText, extractPdfText, pdfPageCount } from './pdf.ts';
+import { analyzeEmailFile } from './email.ts';
+import { analyzeEpubFile } from './ebook.ts';
 import type { AnalysisResult, AnalysisSection, Evidence, Finding, InspectionFile } from './types.ts';
 import { digestHex, formatNumber, percent, shortFingerprint } from './utils.ts';
 import { evidence, finding, parseXml, readBytes } from './analysis-utils.ts';
@@ -41,68 +43,11 @@ function buildResult(file: InspectionFile, analyzerId: string, analyzerName: str
   };
 }
 
-﻿function extractPdfStrings(source: string): string[] {
-  const strings: string[] = [];
-  for (const match of source.matchAll(/\((?:\\.|[^()])+\)\s*T[jJ]/g)) {
-    const raw = match[0].match(/\((?:\\.|[^()])+\)/)?.[0]?.slice(1, -1) ?? '';
-    strings.push(raw.replace(/\\([()\\nrtbf])/g, '$1').replace(/\\([0-7]{1,3})/g, (_, oct) => String.fromCharCode(parseInt(oct, 8))));
-  }
-  for (const match of source.matchAll(/\[((?:\((?:\\.|[^()])+\)\s*(?:-?\d+\.?\d*)?\s*)+)\]\s*TJ/g)) {
-    for (const inner of match[1].matchAll(/\(((?:\\.|[^()])+)\)/g)) {
-      strings.push(inner[1].replace(/\\([()\\nrtbf])/g, '$1').replace(/\\([0-7]{1,3})/g, (_, oct) => String.fromCharCode(parseInt(oct, 8))));
-    }
-  }
-  return strings;
-}
-
-/**
- * Extract and decompress FlateDecode streams from a PDF so text operators can be
- * located inside compressed content streams. Memory stays bounded because each
- * stream is decompressed independently and only the first maxBytes of the
- * decompressed payload are retained for text scanning.
- */
-function extractPdfStreamText(source: string, maxBytes = 4 * 1024 * 1024): string {
-  const chunks: string[] = [];
-  const streamPattern = /stream\r?\n([\s\S]*?)endstream/g;
-  let match: RegExpExecArray | null;
-  let guard = 0;
-  while ((match = streamPattern.exec(source)) !== null && guard < 400) {
-    guard += 1;
-    const raw = match[1];
-    if (!raw.length) continue;
-    const bytes = new Uint8Array(raw.length);
-    for (let index = 0; index < raw.length; index += 1) {
-      bytes[index] = raw.charCodeAt(index) & 0xff;
-    }
-    let decoded: Uint8Array | null = null;
-    try {
-      decoded = unzlibSync(bytes);
-    } catch {
-      decoded = null;
-    }
-    if (decoded) {
-      chunks.push(new TextDecoder('latin1', { fatal: false }).decode(decoded.slice(0, maxBytes)));
-    }
-  }
-  return chunks.join('\n');
-}
-
-function pdfPageCount(source: string): number {
-  const countMatches = [...source.matchAll(/\/Type\s*\/Pages\b[\s\S]{0,400}?\/Count\s+(\d+)/g)];
-  if (countMatches.length) {
-    const counts = countMatches.map((match) => Number(match[1])).filter((value) => Number.isFinite(value));
-    if (counts.length) {
-      return Math.max(...counts);
-    }
-  }
-  return (source.match(/\/Type\s*\/Page\b/g) ?? []).length;
-}
-
 export async function analyzePdfFile(file: InspectionFile, options: { signal: AbortSignal; bytes?: Uint8Array }): Promise<AnalysisResult> {
   ensureNotAborted(options.signal);
-  const bytes = options.bytes ?? await readBytes(file, 20 * 1024 * 1024);
-  const text = new TextDecoder('latin1', { fatal: false }).decode(bytes);
-  if (!text.startsWith('%PDF-')) {
+  const bytes = options.bytes ?? await readBytes(file, 64 * 1024 * 1024);
+  const headerText = new TextDecoder('latin1', { fatal: false }).decode(bytes.slice(0, 8 * 1024 * 1024));
+  if (!headerText.startsWith('%PDF-')) {
     const fingerprint = await digestHex(bytes);
     const summary = 'Not a valid PDF header';
     return buildResult(
@@ -122,33 +67,65 @@ export async function analyzePdfFile(file: InspectionFile, options: { signal: Ab
     );
   }
   const fingerprint = await digestHex(bytes);
-  const pageCount = pdfPageCount(text);
-  const streamText = extractPdfStreamText(text);
-  const searchable = streamText ? `${text}\n${streamText}` : text;
-  const metadata = {
-    title: (searchable.match(/\/Title\s*\((.*?)\)/s)?.[1] ?? '').trim(),
-    author: (searchable.match(/\/Author\s*\((.*?)\)/s)?.[1] ?? '').trim(),
-    creator: (searchable.match(/\/Creator\s*\((.*?)\)/s)?.[1] ?? '').trim(),
-    producer: (searchable.match(/\/Producer\s*\((.*?)\)/s)?.[1] ?? '').trim(),
-    created: (searchable.match(/\/CreationDate\s*\((.*?)\)/s)?.[1] ?? '').trim(),
-    modified: (searchable.match(/\/ModDate\s*\((.*?)\)/s)?.[1] ?? '').trim()
+  const fallbackPageCount = pdfPageCount(headerText);
+  const extraction = await extractPdfText(bytes, { signal: options.signal });
+  const pageCount = extraction.pageCount || fallbackPageCount;
+  const wordCount = extraction.wordCount;
+  const characterCount = extraction.characterCount;
+  const snippets = extraction.snippets;
+  const perPage = extraction.perPage;
+  const extractionWarnings = extraction.warnings;
+  // Metadata prefers the pdfjs document info dict; the raw scan is a fallback.
+  const metadata = extraction.metadata ?? extractPdfMetadataFromRaw(`${headerText}\n${extractPdfStreamText(headerText)}`);
+  const searchableRaw = `${headerText}\n${extractPdfStreamText(headerText)}`;
+  const links = limitArray([...searchableRaw.matchAll(/\/URI\s*\((.*?)\)/g)].map((m) => m[1]), 20);
+  const images = (searchableRaw.match(/\/Subtype\s*\/Image\b/g) ?? []).length;
+  const textSnippets = limitArray(snippets, 60);
+  const annotations = (searchableRaw.match(/\/Annots\b/g) ?? []).length;
+  const embeddedFiles = (searchableRaw.match(/\/EmbeddedFiles\b/g) ?? []).length;
+  const fontObjects = (searchableRaw.match(/\/Type\s*\/Font\b/g) ?? []).length;
+  let blankPages = 0;
+  if (pageCount > 0 && perPage.length === pageCount) {
+    blankPages = perPage.filter((page) => !page.trim()).length;
+  } else if (pageCount > 0) {
+    blankPages = wordCount === 0 ? pageCount : 0;
+  }
+  const scannedLikely = pageCount > 0 && wordCount === 0 && images > 0;
+  const structure = extraction.structure;
+  const pageSizes = structure?.pageSizes ?? [];
+  const uniformPageSize = pageSizes.length > 0 && pageSizes.every((size) => size.width === pageSizes[0].width && size.height === pageSizes[0].height);
+  const rotations = new Set(pageSizes.map((size) => size.rotate));
+  const formatPageSize = (width: number, height: number): string => {
+    const roundedWidth = Math.round(width);
+    const roundedHeight = Math.round(height);
+    const name = roundedWidth === 612 && roundedHeight === 792 ? ' (Letter)' : roundedWidth === 595 && roundedHeight === 842 ? ' (A4)' : '';
+    return `${roundedWidth} x ${roundedHeight} pt${name}`;
   };
-  const links = limitArray([...searchable.matchAll(/\/URI\s*\((.*?)\)/g)].map((m) => m[1]), 20);
-  const images = (searchable.match(/\/Subtype\s*\/Image\b/g) ?? []).length;
-  const textSnippets = limitArray(extractPdfStrings(searchable), 60);
-  const annotations = (searchable.match(/\/Annots\b/g) ?? []).length;
-  const embeddedFiles = (searchable.match(/\/EmbeddedFiles\b/g) ?? []).length;
-  const fontObjects = (searchable.match(/\/Type\s*\/Font\b/g) ?? []).length;
-  const blankPages = pageCount > 0 && textSnippets.length === 0 ? pageCount : 0;
-  const scannedLikely = pageCount > 0 && textSnippets.length === 0 && images > 0;
   const evidenceList: Evidence[] = [
     evidence('pdf-pages', 'Pages', formatNumber(pageCount || 0)),
+    evidence('pdf-words', 'Words', formatNumber(wordCount)),
+    evidence('pdf-characters', 'Characters', formatNumber(characterCount)),
+    evidence('pdf-text-snippets', 'Text snippets', formatNumber(snippets.length)),
     evidence('pdf-images', 'Images', formatNumber(images)),
-    evidence('pdf-text-snippets', 'Text snippets', formatNumber(textSnippets.length)),
     evidence('pdf-blank-pages', 'Pages without extracted text', formatNumber(blankPages)),
     evidence('pdf-annotations', 'Annotations', formatNumber(annotations)),
     evidence('pdf-fonts', 'Font objects', formatNumber(fontObjects))
   ];
+  if (pageSizes.length) {
+    evidenceList.push(
+      evidence('pdf-page-sizes', 'Page sizes', uniformPageSize ? formatPageSize(pageSizes[0].width, pageSizes[0].height) : 'Mixed sizes'),
+      evidence('pdf-rotation', 'Rotation', rotations.size ? [...rotations].filter((rotation) => rotation !== 0).map((rotation) => `${rotation}\u00b0`).join(', ') || 'None' : 'Unknown')
+    );
+  }
+  if (structure) {
+    evidenceList.push(
+      evidence('pdf-encrypted', 'Encrypted', structure.encrypted ? 'Yes' : 'No'),
+      evidence('pdf-form-fields', 'Form fields', structure.hasAcroForm ? 'Present' : 'Not detected'),
+      evidence('pdf-linearized', 'Linearized', structure.linearized ? 'Yes' : 'No'),
+      evidence('pdf-outline', 'Outline items', formatNumber(structure.outlineCount)),
+      evidence('pdf-destinations', 'Named destinations', formatNumber(structure.destinationsCount))
+    );
+  }
   const sections: AnalysisSection[] = [
     {
       id: 'pdf-facts',
@@ -159,11 +136,20 @@ export async function analyzePdfFile(file: InspectionFile, options: { signal: Ab
       id: 'pdf-metadata',
       title: 'Structure',
       items: [
-        evidence('pdf-title', 'Title', metadata.title || 'Not present'),
-        evidence('pdf-author', 'Author', metadata.author || 'Not present'),
-        evidence('pdf-creator', 'Creator', metadata.creator || 'Not present'),
-        evidence('pdf-producer', 'Producer', metadata.producer || 'Not present')
+        evidence('pdf-title', 'Title', metadata?.title || 'Not present'),
+        evidence('pdf-author', 'Author', metadata?.author || 'Not present'),
+        evidence('pdf-creator', 'Creator', metadata?.creator || 'Not present'),
+        evidence('pdf-producer', 'Producer', metadata?.producer || 'Not present')
       ]
+    },
+    {
+      id: 'pdf-text',
+      title: 'Extracted text',
+      items: perPage.length
+        ? perPage.slice(0, 8).map((page, index) => evidence(`pdf-page-${index}`, `Page ${index + 1}`, page.replace(/\s+/g, ' ').trim().slice(0, 400) || '(no text)'))
+        : textSnippets.length
+          ? [evidence('pdf-text-preview', 'Text preview', extraction.text.replace(/\s+/g, ' ').trim().slice(0, 400) || '(no text)')]
+          : [evidence('pdf-no-text', 'Extracted text', 'No extractable text found')]
     },
     {
       id: 'pdf-links',
@@ -181,10 +167,10 @@ export async function analyzePdfFile(file: InspectionFile, options: { signal: Ab
   // Keep the flat evidence trail complete so every section item and finding
   // reference is resolvable from result.evidence.
   evidenceList.push(
-    evidence('pdf-title', 'Title', metadata.title || 'Not present'),
-    evidence('pdf-author', 'Author', metadata.author || 'Not present'),
-    evidence('pdf-creator', 'Creator', metadata.creator || 'Not present'),
-    evidence('pdf-producer', 'Producer', metadata.producer || 'Not present')
+    evidence('pdf-title', 'Title', metadata?.title || 'Not present'),
+    evidence('pdf-author', 'Author', metadata?.author || 'Not present'),
+    evidence('pdf-creator', 'Creator', metadata?.creator || 'Not present'),
+    evidence('pdf-producer', 'Producer', metadata?.producer || 'Not present')
   );
   if (links.length) {
     links.forEach((value, index) => evidenceList.push(evidence(`pdf-link-${index}`, `Link ${index + 1}`, value)));
@@ -195,21 +181,21 @@ export async function analyzePdfFile(file: InspectionFile, options: { signal: Ab
     evidenceList.push(evidence('pdf-embedded-count', 'Embedded file attachments', formatNumber(embeddedFiles)));
   }
   const ocrAvailable = await isOcrAvailable();
-  const textDensity = pageCount ? textSnippets.length / pageCount : 0;
+  const textDensity = pageCount ? wordCount / pageCount : 0;
   const emptyPageRatio = pageCount ? blankPages / pageCount : 0;
   const repeatedCounts = new Map<string, number>();
   for (const snippet of textSnippets) {
     repeatedCounts.set(snippet, (repeatedCounts.get(snippet) ?? 0) + 1);
   }
   const repeatedPattern = [...repeatedCounts.entries()].find(([, count]) => count > 1);
-  const pdfDateMatch = metadata.created.match(/D:(\d{4})(\d{2})(\d{2})/);
+  const pdfDateMatch = metadata?.created?.match(/D:(\d{4})(\d{2})(\d{2})/);
   let futureDate = false;
   if (pdfDateMatch) {
     const created = new Date(Date.UTC(Number(pdfDateMatch[1]), Number(pdfDateMatch[2]) - 1, Number(pdfDateMatch[3])));
     futureDate = created.getTime() > Date.now() + 24 * 60 * 60 * 1000;
   }
   evidenceList.push(
-    evidence('pdf-text-density', 'Text density', pageCount ? `${textDensity.toFixed(2)} snippets per page` : 'n/a'),
+    evidence('pdf-text-density', 'Text density', pageCount ? `${textDensity.toFixed(2)} words per page` : 'n/a'),
     evidence('pdf-empty-page-ratio', 'Pages without text', pageCount ? percent(emptyPageRatio) : 'n/a')
   );
   if (repeatedPattern) {
@@ -220,30 +206,78 @@ export async function analyzePdfFile(file: InspectionFile, options: { signal: Ab
     id: 'pdf-deep',
     title: 'Deep analysis',
     items: [
-      evidence('pdf-text-density', 'Text density', pageCount ? `${textDensity.toFixed(2)} snippets per page` : 'n/a'),
+      evidence('pdf-text-density', 'Text density', pageCount ? `${textDensity.toFixed(2)} words per page` : 'n/a'),
       evidence('pdf-empty-page-ratio', 'Pages without text', pageCount ? percent(emptyPageRatio) : 'n/a'),
       repeatedPattern ? evidence('pdf-repeated', 'Repeated text pattern', `"${repeatedPattern[0].slice(0, 80)}" appears ${repeatedPattern[1]} times`) : evidence('pdf-repeated-none', 'Repeated text pattern', 'None detected'),
       evidence('pdf-ocr-available', 'Local OCR', ocrAvailable ? 'Available' : 'Not installed (tesseract.js)')
     ]
   });
   const unusual: Finding[] = [];
+  if (structure?.encrypted) {
+    unusual.push({
+      id: 'pdf-encrypted',
+      title: 'Encrypted PDF',
+      summary: 'The document is encrypted; text extraction may be partial and content may be protected.',
+      severity: 'high',
+      evidence: ['pdf-encrypted'],
+      methodology: 'fact',
+      confidence: 'high',
+      category: 'metadata'
+    });
+  }
+  if (structure?.hasAcroForm) {
+    unusual.push({
+      id: 'pdf-form-fields',
+      title: 'Interactive form fields',
+      summary: 'The PDF contains interactive form fields (AcroForm) that may collect or expose data.',
+      severity: 'low',
+      evidence: ['pdf-form-fields'],
+      methodology: 'fact',
+      confidence: 'high',
+      category: 'structure'
+    });
+  }
+  if (pageSizes.length > 1 && !uniformPageSize) {
+    unusual.push({
+      id: 'pdf-page-size-variation',
+      title: 'Mixed page sizes',
+      summary: 'Pages use different dimensions, which is common in scanned or assembled documents.',
+      severity: 'low',
+      evidence: ['pdf-page-sizes'],
+      methodology: 'fact',
+      confidence: 'high',
+      category: 'structure'
+    });
+  }
+  if (pageSizes.length && rotations.size > 1) {
+    unusual.push({
+      id: 'pdf-rotation-variation',
+      title: 'Mixed page rotation',
+      summary: `Pages have different rotations (“${[...rotations].map((r) => `${r}°`).join(', ')}”), which can indicate a careless scan or export.`,
+      severity: 'low',
+      evidence: ['pdf-rotation'],
+      methodology: 'fact',
+      confidence: 'high',
+      category: 'structure'
+    });
+  }
   if (scannedLikely) {
     unusual.push(finding('pdf-ocr', 'OCR opportunity', 'The PDF appears to be image-only or nearly image-only.', 'medium', ['pdf-text-snippets', 'pdf-images']));
   }
-  if (metadata.title && metadata.author && metadata.title === metadata.author) {
+  if (metadata?.title && metadata?.author && metadata.title === metadata.author) {
     unusual.push(finding('pdf-meta-same', 'Repeated metadata', 'Title and author are identical, which can be unusual for exported documents.', 'low', ['pdf-title', 'pdf-author']));
   }
   if (embeddedFiles > 0) {
     unusual.push(finding('pdf-embedded-files', 'Embedded attachments', 'The PDF contains embedded file attachments.', 'low', ['pdf-embedded-count']));
   }
-  if (pageCount > 0 && textSnippets.length === 0 && images === 0) {
+  if (pageCount > 0 && wordCount === 0 && images === 0) {
     unusual.push(finding('pdf-no-text', 'No extractable text', 'No text operators were found; the PDF may use an unusual encoding or be malformed.', 'low', ['pdf-text-snippets']));
   }
-  if (pageCount >= 2 && textDensity < 0.3 && textSnippets.length > 0) {
+  if (pageCount >= 2 && textDensity < 0.3 && wordCount > 0) {
     unusual.push({
       id: 'pdf-low-text-density',
       title: 'Low text density',
-      summary: `Only ${formatNumber(textSnippets.length)} text snippets across ${formatNumber(pageCount)} pages (${percent(textDensity)} per page).`,
+      summary: `Only ${formatNumber(wordCount)} words across ${formatNumber(pageCount)} pages (${percent(textDensity)} per page).`,
       severity: 'medium',
       evidence: ['pdf-text-density', 'pdf-pages'],
       methodology: 'anomaly',
@@ -268,7 +302,7 @@ export async function analyzePdfFile(file: InspectionFile, options: { signal: Ab
     unusual.push({
       id: 'pdf-future-date',
       title: 'Creation date in the future',
-      summary: `The document creation date (${metadata.created}) is in the future.`,
+      summary: `The document creation date (${metadata?.created}) is in the future.`,
       severity: 'medium',
       evidence: ['pdf-title', 'pdf-text-snippets'],
       methodology: 'anomaly',
@@ -280,6 +314,13 @@ export async function analyzePdfFile(file: InspectionFile, options: { signal: Ab
   if (scannedLikely) {
     recommendations.push(finding('pdf-ocr-reco', 'Consider OCR', 'Text extraction appears limited; OCR may recover more content.', 'low', ['pdf-text-snippets']));
   }
+  const limitations: string[] = [];
+  if (file.size > 64 * 1024 * 1024) {
+    limitations.push('PDF exceeds the 64 MB inspection limit; analysis is based on the first 64 MB.');
+  }
+  limitations.push(...extractionWarnings);
+  if (scannedLikely) limitations.push('OCR opportunity likely');
+  if (!limitations.length) limitations.push('Read-only metadata/text inspection only');
   return buildResult(
     file,
     'pdf',
@@ -292,11 +333,10 @@ export async function analyzePdfFile(file: InspectionFile, options: { signal: Ab
     [],
     unusual,
     recommendations,
-    [scannedLikely ? 'OCR opportunity likely' : 'Read-only metadata/text inspection only'],
+    limitations,
     `${formatNumber(pageCount || 0)} pages, ${formatNumber(images)} images`
   );
 }
-
 function collectXmlTexts(node: unknown): string[] {
   const texts: string[] = [];
   const visit = (value: unknown, key?: string): void => {
@@ -794,5 +834,10 @@ export async function analyzeDocumentFile(file: InspectionFile, options: { signa
   if (ext === 'pptx') return analyzePptxFile(file, options);
   if (ext === 'xlsx') return analyzeXlsxFile(file, options);
   if (ext === 'xls') return analyzeLegacyXls(file);
+  if (ext === 'eml') return analyzeEmailFile(file, options);
+  if (ext === 'epub') return analyzeEpubFile(file, options);
   return null;
 }
+
+
+

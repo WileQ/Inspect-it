@@ -31,6 +31,15 @@ export interface LlmSettings {
   stream: boolean;
   /** Upper bound (characters) for the bounded LLM context. */
   maxContextChars: number;
+  /**
+   * MASTER GATE for sending raw/extracted content to the provider. OFF by
+   * default. Even when enabled, every raw-content request still requires an
+   * explicit per-inspection confirmation in the UI; auto-run never sends raw
+   * content.
+   */
+  allowRawContent: boolean;
+  /** Per-object cap (characters) for raw/extracted content sent to the AI. */
+  rawContentMaxChars: number;
 }
 
 /** Structured AI explanation produced by the optional LLM layer. */
@@ -49,6 +58,14 @@ export interface AiExplanation {
   limitations: string[];
   /** What is uncertain or missing. */
   uncertainty: string;
+  /** Observations grounded in raw content (only present when raw content was sent). */
+  contentFindings?: string[];
+  /** Questions worth investigating (only present when raw content was sent). */
+  questions?: string[];
+  /** True when the request included raw/extracted content, not just the summary. */
+  rawContentIncluded?: boolean;
+  /** Number of raw-content characters included in the request. */
+  rawContentChars?: number;
   providerName: string;
   model: string;
   generatedAt: string;

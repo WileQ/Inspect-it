@@ -5,8 +5,11 @@ import assert from 'node:assert/strict';
 import { analyzeItem } from '../src/shared/analyzers.ts';
 import {
   aiCacheKeyFor,
+  AI_RAW_SYSTEM_PROMPT,
   buildAiContext,
+  buildAiRawUserPrompt,
   buildChatPayload,
+  buildRawContentBlock,
   clearAiCache,
   clearApiKey,
   DEFAULT_LLM_SETTINGS,
@@ -19,6 +22,7 @@ import {
   parseAiExplanation,
   parseChatCompletionResponse,
   parseSseEvent,
+  extractRawContentForAi,
   requestLlmChat,
   runAiExplanation,
   saveLlmSettings,
@@ -27,7 +31,7 @@ import {
 } from '../src/shared/llm/index.ts';
 import { storageRemove } from '../src/shared/storage.ts';
 import { createLlmMockServer } from './llm-mock.mjs';
-import { makeMultiSelectionFolder, makeRichCsvItem } from './fixtures.mjs';
+import { makeMultiSelectionFolder, makePdfItem, makeRichCsvItem } from './fixtures.mjs';
 
 const signal = new AbortController().signal;
 
@@ -436,6 +440,141 @@ export async function runMilestoneFourTests() {
     assert.equal(await hasUsableAi(llmSettings({ baseUrl: 'http://127.0.0.1:1/v1' })), true, 'key + config -> usable');
     assert.equal(await hasUsableAi(llmSettings({ enabled: false, baseUrl: 'http://127.0.0.1:1/v1' })), false, 'disabled -> not usable');
     await clearApiKey();
+  }
+
+  // --- Raw-content mode: settings defaults + normalization -------------------
+  {
+    assert.equal(DEFAULT_LLM_SETTINGS.allowRawContent, false, 'raw content is OFF by default');
+    assert.equal(DEFAULT_LLM_SETTINGS.rawContentMaxChars, 20000, 'raw content budget default');
+    const norm = normalizeLlmSettings({ ...DEFAULT_LLM_SETTINGS, allowRawContent: true, rawContentMaxChars: 999999 });
+    assert.equal(norm.allowRawContent, true, 'raw content gate round-trips');
+    assert.equal(norm.rawContentMaxChars, 120000, 'raw content budget clamped to max');
+    const clamped = normalizeLlmSettings({ ...DEFAULT_LLM_SETTINGS, rawContentMaxChars: 1 });
+    assert.equal(clamped.rawContentMaxChars, 2000, 'raw content budget clamped to min');
+  }
+
+  // --- Raw-content block builder ---------------------------------------------
+  {
+    const long = 'x'.repeat(5000);
+    const block = buildRawContentBlock(
+      [
+        { targetName: 'notes.txt', content: 'hello world\nsecond line' },
+        { targetName: 'big.log', content: long }
+      ],
+      3000
+    );
+    assert.ok(block.text.includes('[RAW CONTENT] notes.txt'), 'raw block labels the object');
+    assert.ok(block.text.includes('hello world'), 'raw block keeps content');
+    assert.ok(block.text.includes('truncated'), 'truncated content is marked');
+    assert.ok(block.truncated, 'truncation flag set');
+    assert.ok(block.chars <= 3200, 'raw block stays bounded');
+    const empty = buildRawContentBlock([{ targetName: 'photo.png', content: '', note: 'binary not sent' }], 2000);
+    assert.ok(empty.text.includes('binary not sent'), 'binary objects produce a note, not content');
+    assert.equal(empty.includedObjects, 0, 'no content objects counted for binary');
+  }
+
+  // --- Raw-content prompt -----------------------------------------------------
+  {
+    const prompt = buildAiRawUserPrompt('SUMMARY LINE', '[RAW CONTENT] a.txt\n<content>abc</content>', 1);
+    assert.ok(prompt.includes('<raw-content>'), 'raw user prompt includes the raw block');
+    assert.ok(prompt.includes('contentFindings'), 'raw user prompt requests contentFindings');
+    assert.ok(AI_RAW_SYSTEM_PROMPT.includes('RAW OR EXTRACTED CONTENT'), 'raw system prompt explains the mode');
+    assert.ok(AI_RAW_SYSTEM_PROMPT.includes('do NOT reproduce them verbatim'), 'raw system prompt redacts secrets');
+  }
+
+  // --- parseAiExplanation handles raw fields ---------------------------------
+  {
+    const parsed = parseAiExplanation(
+      '{"summary":"s","important":["i"],"contentFindings":["Line 12 references a credential"],"questions":["Who owns the token?"],"unusual":["u"]}',
+      { providerName: 'Mock', model: 'm', rawContentIncluded: true, rawContentChars: 123 }
+    );
+    assert.equal(parsed.contentFindings.length, 1, 'contentFindings parsed');
+    assert.equal(parsed.questions.length, 1, 'questions parsed');
+    assert.equal(parsed.rawContentIncluded, true, 'rawContentIncluded meta preserved');
+    assert.equal(parsed.rawContentChars, 123, 'rawContentChars meta preserved');
+  }
+
+  // --- Cache key separates summary-only vs raw content ------------------------
+  {
+    const csv = await analyzeItem(makeRichCsvItem(), { signal });
+    const settings = llmSettings();
+    const summaryKey = await aiCacheKeyFor([csv], settings);
+    const rawKey = await aiCacheKeyFor([csv], settings, [{ targetName: 'deep.csv', content: 'id,category\n1,a' }]);
+    const rawKey2 = await aiCacheKeyFor([csv], settings, [{ targetName: 'deep.csv', content: 'id,category\n2,b' }]);
+    assert.notEqual(summaryKey, rawKey, 'raw content changes the cache key');
+    assert.notEqual(rawKey, rawKey2, 'different raw content changes the cache key');
+  }
+
+  // --- extractRawContentForAi: text + PDF + binary ----------------------------
+  {
+    const csv = makeRichCsvItem();
+    const pdf = await makePdfItem();
+    const extracted = await extractRawContentForAi([csv, pdf], signal);
+    assert.ok(extracted.length === 2, 'one entry per object');
+    assert.ok(extracted[0].content.includes('id,name') && extracted[0].content.includes('Alice'), 'CSV text content extracted');
+    assert.ok(extracted[1].content.includes('Hello PDF'), 'PDF text content extracted');
+    assert.ok(extracted[1].note.includes('PDF'), 'PDF entry notes extraction source');
+  }
+
+  // --- End-to-end: raw content blocked when the gate is off --------------------
+  {
+    const server = createLlmMockServer({ mode: 'ok' });
+    await server.started;
+    try {
+      const csv = await analyzeItem(makeRichCsvItem(), { signal });
+      await setApiKey('sk-test');
+      const gated = llmSettings({ baseUrl: server.base, allowRawContent: false });
+      await assert.rejects(
+        () => runAiExplanation([csv], gated, { rawContent: [{ targetName: 'deep.csv', content: 'id\n1' }] }),
+        (error) => error instanceof LlmError && error.kind === 'configuration',
+        'raw content without the gate throws a configuration error'
+      );
+      assert.equal(server.requests.length, 0, 'no request when raw content is gated off');
+    } finally {
+      await server.close();
+      await clearApiKey();
+    }
+  }
+
+  // --- End-to-end: raw content sent when enabled -------------------------------
+  {
+    const server = createLlmMockServer({ mode: 'ok' });
+    await server.started;
+    try {
+      const csv = await analyzeItem(makeRichCsvItem(), { signal });
+      await setApiKey('sk-test');
+      server.setJsonBody({
+        id: 'chatcmpl-raw',
+        object: 'chat.completion',
+        model: 'mock-model',
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: 'assistant',
+              content:
+                '{"summary":"Raw summary","important":["A"],"whyItMatters":"B","unusual":["U"],"contentFindings":["Found a suspicious pattern in the content"],"investigate":["Trace it"],"questions":["Where does it come from?"],"limitations":["Content was truncated"],"uncertainty":"Some"}' 
+            },
+            finish_reason: 'stop'
+          }
+        ]
+      });
+      const settings = llmSettings({ baseUrl: server.base, allowRawContent: true });
+      const explanation = await runAiExplanation([csv], settings, {
+        rawContent: [{ targetName: 'deep.csv', content: 'id,category,score\n1,common,3\n2,rare,1000' }]
+      });
+      assert.equal(explanation.rawContentIncluded, true, 'explanation marks raw content');
+      assert.equal(explanation.contentFindings.length, 1, 'contentFindings surfaced');
+      assert.equal(explanation.questions.length, 1, 'questions surfaced');
+      const sent = JSON.parse(server.requests[0].body);
+      const userMessage = sent.messages.find((m) => m.role === 'user').content;
+      assert.ok(userMessage.includes('<raw-content>'), 'raw block included in the request');
+      assert.ok(userMessage.includes('deep.csv'), 'raw block labels the object');
+      assert.ok(sent.messages[0].role === 'system' && sent.messages[0].content.includes('RAW OR EXTRACTED CONTENT'), 'raw system prompt used');
+    } finally {
+      await server.close();
+      await clearApiKey();
+    }
   }
 
   clearAiCache();

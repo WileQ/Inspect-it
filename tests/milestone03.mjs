@@ -1,4 +1,4 @@
-// Milestone 03 - deep local analysis tests. Deterministic fixtures, no network.
+﻿// Milestone 03 - deep local analysis tests. Deterministic fixtures, no network.
 import assert from 'node:assert/strict';
 import { analyzeItem } from '../src/shared/analyzers.ts';
 import {
@@ -18,7 +18,8 @@ import {
   textSimilarity,
   findTextNearDuplicates
 } from '../src/shared/duplicates.ts';
-import { isOcrAvailable, ocrImage, ocrWorthwhile } from '../src/shared/ocr.ts';
+import { isOcrAvailable, ocrImage, ocrWorthwhile, validateOcrText } from '../src/shared/ocr.ts';
+import { analyzePixels, classifyImageScene, extractJpegExif } from '../src/shared/image-analysis.ts';
 import { analyzeFunctionMetrics } from '../src/shared/code.ts';
 import { collectDependencyGraph, dependencyRelationships } from '../src/shared/dependencies.ts';
 import { findCrossObjectRelationships } from '../src/shared/relationships.ts';
@@ -26,12 +27,14 @@ import {
   makeDeepCsvItem,
   makePatternPngItem,
   makePatternPngResizedItem,
+  makeTextLikePngItem,
   makeComplexCodeItem,
   makeProjectWithManifests,
   makeLogSpikeItem,
   makeXlsxDeepItem,
   makeMultiSelectionFolder,
   makeDuplicateFolderItem,
+  makeExifJpegItem,
   makePdfItem,
   toItem
 } from './fixtures.mjs';
@@ -160,6 +163,43 @@ export async function runMilestoneThreeTests() {
     assert.equal(ocrWorthwhile({ isScreenshot: true }).worthwhile, true, 'screenshots warrant OCR');
   }
 
+  // --- OCR output validation (no phantom text) ---
+  {
+    assert.equal(validateOcrText('').accepted, false, 'empty OCR rejected');
+    assert.equal(validateOcrText('Il1 0oO ~~~ !!! ###', 30).accepted, false, 'low-confidence gibberish rejected');
+    assert.equal(validateOcrText('a b c d', 90).accepted, false, 'isolated single letters rejected');
+    assert.equal(validateOcrText('x7q 9', 45).accepted, false, 'two low-confidence words rejected');
+    const accepted = validateOcrText('Hello world this is a report', 92);
+    assert.equal(accepted.accepted, true, 'coherent multi-word text accepted');
+    assert.equal(accepted.words.length, 5, 'meaningful words kept (single letters dropped)');
+    const strongPair = validateOcrText('Welcome Home', 88, [{ text: 'Welcome', confidence: 90 }, { text: 'Home', confidence: 86 }]);
+    assert.equal(strongPair.accepted, true, 'two high-confidence words accepted');
+    assert.ok(Math.abs((strongPair.meanConfidence ?? 0) - 88) < 0.01, 'mean word confidence computed');
+    const noisy = validateOcrText('The quick brown fox', 25);
+    assert.equal(noisy.accepted, false, 'very low overall confidence rejects even wordy output');
+  }
+  {
+    assert.equal(ocrWorthwhile({ width: 1600, height: 900 }).worthwhile, true, 'document-sized images warrant OCR');
+    assert.equal(ocrWorthwhile({ width: 64, height: 64 }).worthwhile, false, 'tiny icons do not warrant OCR');
+    assert.equal(ocrWorthwhile({ width: 800, height: 600, isScreenshot: true }).worthwhile, true, 'screenshot hint still wins');
+  }
+
+  // --- Image pixel analysis (the analyzer actually inspects the image) ---
+  {
+    const result = await analyzeItem(makePatternPngItem('palette.png', 64, 3), { signal });
+    assert.equal(result.analyzerId, 'image');
+    assert.equal(hasEvidence(result, 'Dominant colors'), true, 'dominant colors evidence');
+    assert.equal(hasEvidence(result, 'Brightness'), true, 'brightness evidence');
+    assert.equal(hasEvidence(result, 'Contrast'), true, 'contrast evidence');
+    assert.equal(hasEvidence(result, 'Sharpness'), true, 'sharpness evidence');
+    assert.equal(hasEvidence(result, 'Perceptual hash'), true, 'perceptual hash evidence');
+    assert.ok((result.visualizations ?? []).some((viz) => viz.kind === 'bars' && viz.id === 'image-palette'), 'color palette visualization');
+    const decoded = await decodeImage(new Uint8Array(await (await makePatternPngItem('p.png', 16, 1)).file.arrayBuffer()));
+    assert.ok(decoded, 'PNG decodes for pixel analysis in Node');
+    const pixels = decoded ? analyzePixels(decoded) : null;
+    assert.ok(pixels && pixels.dominantColors.length > 0, 'pixel analysis produces a palette');
+    assert.ok(pixels && pixels.perceptualHash.length > 0, 'pixel analysis produces a perceptual hash');
+  }
   // --- Code complexity ---
   {
     const item = makeComplexCodeItem();
@@ -207,6 +247,40 @@ export async function runMilestoneThreeTests() {
     assert.ok(result.sections.some((section) => section.id === 'xlsx-deep'), 'xlsx deep section');
   }
 
+  // --- JPEG EXIF extraction ---
+  {
+    const item = makeExifJpegItem();
+    const bytes = new Uint8Array(await item.file.arrayBuffer());
+    const exif = extractJpegExif(bytes);
+    assert.ok(exif, 'EXIF parsed from JPEG');
+    assert.equal(exif?.make, 'Test', 'EXIF make');
+    assert.equal(exif?.model, 'Camera', 'EXIF model');
+    assert.equal(exif?.dateTime, '2023:01:02 03:04:05', 'EXIF date');
+    assert.ok(Math.abs((exif?.gpsLatitude ?? 0) - 52.2297) < 0.001, 'EXIF GPS latitude');
+    assert.ok(Math.abs((exif?.gpsLongitude ?? 0) - 21.0122) < 0.001, 'EXIF GPS longitude');
+    const result = await analyzeItem(item, { signal });
+    assert.equal(hasEvidence(result, 'Camera make', 'Test'), true, 'analyzer surfaces EXIF make');
+    assert.equal(hasEvidence(result, 'Date captured', '2023:01:02 03:04:05'), true, 'analyzer surfaces EXIF date');
+    assert.equal(hasEvidence(result, 'GPS'), true, 'analyzer surfaces GPS');
+  }
+  // --- Image scene classification (text-likelihood, no phantom text) ---
+  {
+    const docResult = await analyzeItem(makeTextLikePngItem(), { signal });
+    assert.equal(hasEvidence(docResult, 'Content type', 'Document / scan'), true, 'text-like image classified as document/scan');
+    assert.ok(Number(docResult.evidence.find((e) => e.id === 'image-text-likelihood').value.replace('%', '')) >= 50, 'text-like image has high text likelihood');
+    assert.equal(hasFinding(docResult, 'image-text-like'), true, 'text-like image produces a text-like finding');
+    assert.equal(docResult.evidence.some((e) => e.id === 'image-ocr'), true, 'OCR path is engaged for text-like images');
+
+    const patternResult = await analyzeItem(makePatternPngItem('photo.png', 128, 2), { signal });
+    assert.equal(hasFinding(patternResult, 'image-text-like'), false, 'pattern/photo images do not claim text');
+    const pixels = analyzePixels({ width: 480, height: 160, data: new Uint8ClampedArray(480 * 160 * 4).fill(255) });
+    // All-white image -> blank
+    if (pixels) {
+      const blank = classifyImageScene(pixels);
+      assert.equal(blank.kind, 'blank', 'blank image classified as blank');
+      assert.ok(blank.textLikelihood < 0.1, 'blank image has near-zero text likelihood');
+    }
+  }
   // --- Cross-object relationships ---
   {
     const folder = makeMultiSelectionFolder();
@@ -252,3 +326,8 @@ export async function runMilestoneThreeTests() {
 
   console.log('Milestone 03 deep-analysis tests passed.');
 }
+
+
+
+
+

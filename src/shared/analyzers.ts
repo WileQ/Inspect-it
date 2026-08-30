@@ -1,4 +1,4 @@
-import type {
+﻿import type {
   AnalysisResult,
   AnalysisSection,
   Evidence,
@@ -26,7 +26,8 @@ import {
   skewness,
   uniqueRatio
 } from './anomaly.ts';
-import { findExactDuplicates, imageHashOf, imageSimilarity, summarizeDuplicates } from './duplicates.ts';
+import { decodeImage, findExactDuplicates, imageHashOf, imageSimilarity, summarizeDuplicates } from './duplicates.ts';
+import { analyzePixels, classifyImageScene, extractJpegExif } from './image-analysis.ts';
 import { findCrossObjectRelationships } from './relationships.ts';
 import { isOcrAvailable, ocrImage, ocrWorthwhile } from './ocr.ts';
 import {
@@ -896,14 +897,146 @@ async function analyzeImageFile(file: InspectionFile, bytes: Uint8Array, options
   if (megapixels > 20) {
     unusual.push(createFinding('image-large', 'Large image', 'The image is large enough to be expensive to render or process.', 'medium', ['image-megapixels']));
   }
-  // Local OCR: only attempt when it is worthwhile and actually available.
+  const visualizations: Visualization[] = [];
   const limitations: string[] = [];
+  let sceneLikelihood: number | undefined;
+  // Pixel-level analysis: colors, brightness, contrast, sharpness, perceptual
+  // hash. Decoding is bounded (small images are cheap; huge ones are skipped).
+  if (megapixels <= 12 && parsed.width > 0 && parsed.height > 0) {
+    try {
+      const decoded = await decodeImage(bytes.slice(0, 32 * 1024 * 1024));
+      if (decoded) {
+        const pixels = analyzePixels(decoded);
+        if (pixels) {
+          evidence.push(createEvidence('image-colors', 'Dominant colors', pixels.dominantColors.map((color) => color.hex).join(', ')));
+          evidence.push(createEvidence('image-brightness', 'Brightness', `${Math.round(pixels.brightness * 100)}%`));
+          evidence.push(createEvidence('image-contrast', 'Contrast', `${Math.round(pixels.contrast * 100)}%`));
+          evidence.push(createEvidence('image-sharpness', 'Sharpness', `${Math.round(pixels.sharpness * 100)}%`));
+          evidence.push(createEvidence('image-colorfulness', 'Colorfulness', `${Math.round(pixels.colorfulness * 100)}%`));
+          evidence.push(createEvidence('image-hash', 'Perceptual hash', pixels.perceptualHash.slice(0, 16)));
+          if (pixels.dominantColors.length > 1) {
+            visualizations.push({
+              id: 'image-palette',
+              kind: 'bars',
+              title: 'Dominant colors',
+              labels: pixels.dominantColors.map((color) => color.hex),
+              values: pixels.dominantColors.map((color) => Number((color.ratio * 100).toFixed(1))),
+              unit: '%'
+            });
+          }
+          const scene = classifyImageScene(pixels);
+          sceneLikelihood = scene.textLikelihood;
+          evidence.push(createEvidence('image-scene', 'Content type', scene.label));
+          evidence.push(createEvidence('image-text-likelihood', 'Text likelihood', `${Math.round(scene.textLikelihood * 100)}%`));
+          evidence.push(createEvidence('image-edge-density', 'Edge density', `${Math.round(pixels.edgeDensity * 100)}%`));
+          if (scene.textLikelihood >= 0.5) {
+            unusual.push({
+              id: 'image-text-like',
+              title: 'Text-like content detected',
+              summary: `Pixel analysis estimates a ${Math.round(scene.textLikelihood * 100)}% likelihood of readable text (${scene.reason.toLowerCase()}).`,
+              severity: 'info',
+              evidence: ['image-text-likelihood', 'image-scene'],
+              methodology: 'heuristic',
+              confidence: 'medium',
+              category: 'structure'
+            });
+          } else if (scene.textLikelihood < 0.25) {
+            unusual.push({
+              id: 'image-unlikely-text',
+              title: 'Unlikely to contain text',
+              summary: `Pixel analysis estimates only a ${Math.round(scene.textLikelihood * 100)}% likelihood of readable text (${scene.reason.toLowerCase()}).`,
+              severity: 'info',
+              evidence: ['image-text-likelihood', 'image-scene'],
+              methodology: 'heuristic',
+              confidence: 'medium',
+              category: 'structure'
+            });
+          }
+          if (pixels.sharpness < 0.08 && pixels.sampleCount > 64) {
+            unusual.push({
+              id: 'image-blurry',
+              title: 'Possibly blurry image',
+              summary: `Low edge sharpness (${Math.round(pixels.sharpness * 100)}%) suggests a blurred or out-of-focus image.`,
+              severity: 'low',
+              evidence: ['image-sharpness'],
+              methodology: 'heuristic',
+              confidence: 'medium',
+              category: 'quality'
+            });
+          }
+          if (pixels.brightness < 0.12) {
+            unusual.push({
+              id: 'image-dark',
+              title: 'Very dark image',
+              summary: `Mean brightness is only ${Math.round(pixels.brightness * 100)}%; most pixels are near-black.`,
+              severity: 'low',
+              evidence: ['image-brightness'],
+              methodology: 'heuristic',
+              confidence: 'high',
+              category: 'quality'
+            });
+          }
+          if (pixels.colorfulness < 0.03 && pixels.sampleCount > 64) {
+            unusual.push({
+              id: 'image-monochrome',
+              title: 'Nearly monochrome image',
+              summary: `Only ${Math.round(pixels.colorfulness * 100)}% of pixels are colorful; the image is effectively grayscale.`,
+              severity: 'info',
+              evidence: ['image-colorfulness'],
+              methodology: 'heuristic',
+              confidence: 'high',
+              category: 'quality'
+            });
+          }
+        } else {
+          limitations.push('Pixel-level analysis skipped: image pixels could not be interpreted.');
+        }
+      } else {
+        limitations.push('Pixel-level analysis not available for this format in this environment.');
+      }
+    } catch {
+      limitations.push('Pixel-level analysis failed; continuing with header metadata.');
+    }
+  } else if (megapixels > 12) {
+    limitations.push('Pixel-level analysis skipped for images larger than 12 megapixels.');
+  }
+  // EXIF metadata for JPEGs: camera, software, capture date, orientation, GPS.
+  if (parsed.format === 'JPEG') {
+    let exif: ReturnType<typeof extractJpegExif> = null;
+    try {
+      exif = extractJpegExif(bytes.slice(0, 8 * 1024 * 1024));
+    } catch {
+      // Malformed EXIF must never crash image analysis.
+      exif = null;
+    }
+    if (exif) {
+      if (exif.make) evidence.push(createEvidence('image-exif-make', 'Camera make', exif.make));
+      if (exif.model) evidence.push(createEvidence('image-exif-model', 'Camera model', exif.model));
+      if (exif.software) evidence.push(createEvidence('image-exif-software', 'Software', exif.software));
+      const captured = exif.dateTimeOriginal ?? exif.dateTime;
+      if (captured) evidence.push(createEvidence('image-exif-datetime', 'Date captured', captured));
+      if (exif.orientation && exif.orientation !== 1) {
+        evidence.push(createEvidence('image-exif-orientation', 'Orientation', `Rotated (EXIF ${exif.orientation})`));
+      }
+      if (exif.gpsLatitude !== undefined && exif.gpsLongitude !== undefined) {
+        evidence.push(createEvidence('image-exif-gps', 'GPS', `${exif.gpsLatitude.toFixed(5)}, ${exif.gpsLongitude.toFixed(5)}`));
+      }
+    }
+  }
+  // Local OCR: attempt when it is worthwhile (screenshot-named or
+  // document-sized images) and actually available. Output is validated so
+  // phantom text from noise/photos is never reported as OCR text.
   let ocrSection: AnalysisSection | undefined;
   let ocrFinding: Finding | undefined;
   const ocrCheck = ocrWorthwhile({
-    isScreenshot: /screenshot|screen|scan|capture/i.test(file.name)
+    isScreenshot: /screenshot|screen|scan|capture|ocr/i.test(file.name),
+    width: parsed.width,
+    height: parsed.height,
+    textLikelihood: sceneLikelihood
   });
-  if (ocrCheck.worthwhile) {
+  if (!ocrCheck.worthwhile && sceneLikelihood !== undefined) {
+    evidence.push(createEvidence('image-ocr', 'OCR', `Skipped - content is not text-like (${Math.round(sceneLikelihood * 100)}% likelihood)`));
+  } else if (ocrCheck.worthwhile) {
     if (await isOcrAvailable()) {
       const outcome = await ocrImage(bytes.slice(0, 8 * 1024 * 1024));
       if (outcome.available && outcome.text.trim()) {
@@ -927,7 +1060,7 @@ async function analyzeImageFile(file: InspectionFile, bytes: Uint8Array, options
           category: 'structure'
         };
       } else {
-        evidence.push(createEvidence('image-ocr', 'OCR', 'No readable text found'));
+        evidence.push(createEvidence('image-ocr', 'OCR', outcome.message || 'No readable text found'));
       }
     } else {
       evidence.push(createEvidence('image-ocr', 'OCR', 'Not available - install tesseract.js for on-device OCR'));
@@ -951,13 +1084,13 @@ async function analyzeImageFile(file: InspectionFile, bytes: Uint8Array, options
     progressLabel: 'Image analysis complete',
     cacheKey: fingerprint,
     generatedAt: new Date().toISOString(),
-    sourceSummary: `${formatNumber(parsed.width)} x ${formatNumber(parsed.height)} image`
+    sourceSummary: `${formatNumber(parsed.width)} x ${formatNumber(parsed.height)} image`,
+    visualizations: visualizations.length ? visualizations : undefined
   };
   options.onProgress?.({ completed: 3, total: 3, step: 'Image analysis complete' });
   options.onPartial?.(result);
   return result;
 }
-
 function collectFolderStats(folder: InspectionFolder): {
   fileCount: number;
   folderCount: number;
@@ -1490,3 +1623,7 @@ export function buildIdentityHint(item: InspectionItem): string {
   }
   return `${item.name} folder`;
 }
+
+
+
+
