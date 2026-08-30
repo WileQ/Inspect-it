@@ -1,4 +1,4 @@
-# Inspect It
+﻿# Inspect It
 
 > **Drop anything. Understand it.**
 
@@ -105,6 +105,33 @@ The analyzer engine lives in `src/shared/` and is shared between the desktop app
 
 > The installer preserves your analysis history and settings when uninstalling.
 
+### macOS (release build)
+
+1. Download `Inspect-This-1.0.0-macOS-<arch>.dmg` from the [Releases](../../releases) page (choose the build for your Mac: Apple Silicon `arm64` or Intel `x64`).
+2. Open the DMG and drag **Inspect This** into your Applications folder.
+3. Launch it. The first time, right-click the app and choose **Open** if macOS Gatekeeper complains (the app is not notarized in community builds).
+
+> The menu-bar icon, the global shortcut, and launch-at-login use the macOS conventions. `Cmd+Space` is reserved by Spotlight, so the default shortcut is **Control+Space** (falls back to `Cmd+Shift+Space`).
+
+### Linux (release build)
+
+1. Download `Inspect-This-1.0.0.AppImage` (or the `.deb` for Debian/Ubuntu) from the [Releases](../../releases) page.
+2. Make the AppImage executable and run it, or install the `.deb`:
+
+   ```bash
+   chmod +x Inspect-This-1.0.0.AppImage
+   ./Inspect-This-1.0.0.AppImage
+   # or
+   sudo apt install ./inspect-this_1.0.0_amd64.deb
+   ```
+
+3. Some desktop environments need the AppImage runtime; install `libfuse2` if you see a FUSE error (Ubuntu 22.04+):
+
+   ```bash
+   sudo apt install libfuse2
+   ```
+
+> On X11 the global shortcut and always-on-top bubble work out of the box. On **Wayland**, global shortcuts and strict always-on-top are limited by the compositor, so use the bubble/tray instead. The system tray needs an AppIndicator/StatusNotifier host (GNOME: install the "AppIndicator and KStatusNotifierItem" extension).
 ### From source (developers)
 
 ```bash
@@ -122,13 +149,32 @@ npm test             # full test suite (node runner)
 npx vitest run       # same suites via vitest
 npx tsc --noEmit     # type check
 npm run build        # production renderer bundle (dist/)
-npm run package      # build + unpacked app (release/win-unpacked)
-npm run dist         # build + installers (release/)
-npm run dist:win     # build + NSIS Windows installer
+npm run package      # build + unpacked app for the current platform (release/<platform>-unpacked)
+npm run dist         # build + installers for the current platform (release/)
+npm run dist:win     # build + NSIS Windows installer (run on Windows)
+npm run dist:mac     # build + DMG/ZIP macOS app (run on macOS)
+npm run dist:linux   # build + AppImage/deb Linux packages (run on Linux)
 npm run icons        # regenerate app/tray icons (scripts/generate-icons.mjs)
 ```
 
+> Each installer must be built on its own OS: macOS packages require macOS
+> (code signing/notarization needs a Mac and Apple credentials), Linux packages
+> are produced on Linux, and Windows packages on Windows. The CI workflow
+> (`.github/workflows/build.yml`) builds and tests all three on every push.
+
+
 **Production builds are self-contained**: the renderer is bundled into the Electron app (`dist/`), so the packaged application does not need Vite, localhost, Node, or npm at runtime.
+
+## Platform support
+
+| Platform | Installers | Notes |
+| --- | --- | --- |
+| Windows x64 | NSIS `.exe` | Fully supported; global shortcut `Ctrl+Space`, launch at login, tray. |
+| macOS (x64 + arm64) | `.dmg`, `.zip` | Default shortcut `Control+Space` (`Cmd+Space` is Spotlight); launch at login via macOS login items. |
+| Linux | AppImage, `.deb` | Tray + shortcuts work on X11; Wayland limits global shortcuts and always-on-top. Launch at login via XDG autostart. |
+
+See [docs/PLATFORMS.md](docs/PLATFORMS.md) for troubleshooting.
+
 
 ## Testing
 
@@ -187,3 +233,4 @@ Contributions are welcome. Please:
 ## License
 
 [MIT](LICENSE)
+

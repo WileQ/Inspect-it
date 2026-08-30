@@ -26,8 +26,13 @@ OpenAI-compatible AI layer can add a plain-English interpretation on top.
 ## Supported platforms
 
 - Windows x64 ? installable NSIS build (`Inspect-This-1.0.0-Windows-x64.exe`)
-- macOS and Linux targets are configured; builds for those platforms were not
-  produced in the Windows development environment.
+- macOS x64 + arm64 ? DMG/ZIP builds (`Inspect-This-1.0.0-macOS-<arch>.dmg`)
+- Linux x64 ? AppImage and `.deb` builds
+- Browser ? drag-and-drop analysis (files you explicitly select)
+
+Builds for each platform must be produced on that platform (or via the CI
+workflow, `.github/workflows/build.yml`, which builds and tests all three).
+See `docs/PLATFORMS.md` for details and troubleshooting.
 
 ## Local-first / privacy model
 
@@ -45,6 +50,10 @@ OpenAI-compatible AI layer can add a plain-English interpretation on top.
 
 ## Known limitations
 
+- Linux: global shortcuts and strict always-on-top are unavailable on Wayland
+  compositors; the system tray requires an AppIndicator/StatusNotifier host.
+- macOS: `Cmd+Space` is reserved by Spotlight, so the default global shortcut
+  is `Control+Space` (falls back to `Cmd+Shift+Space`).
 - PDF extraction is heuristic; complex/vector layouts may be partially extracted.
 - Legacy .xls is detected but not structurally inspected (convert to XLSX).
 - Audio/video analysis reads container metadata only (no decode).
@@ -56,10 +65,12 @@ OpenAI-compatible AI layer can add a plain-English interpretation on top.
 
 ## Installation
 
-1. Download `Inspect-This-1.0.0-Windows-x64.exe` from GitHub Releases.
-2. Run the installer (no Node/npm/terminal required).
-3. Launch Inspect This; the orange bubble appears.
-4. Drop anything onto it.
+- **Windows**: download `Inspect-This-1.0.0-Windows-x64.exe`, run the installer
+  (no Node/npm/terminal required), and launch Inspect This. Uninstalling
+  preserves your analysis history and settings.
+- **macOS**: download the DMG for your architecture, drag the app into
+  Applications, and open it (right-click -> Open the first time).
+- **Linux**: download the AppImage (or `.deb`), make it executable, and run it.
+  See `docs/PLATFORMS.md` for FUSE/tray/Wayland notes.
 
-Uninstalling preserves your analysis history and settings (standard behavior for
-the bundled installer).
+In all cases the orange bubble appears; drop anything onto it to begin.

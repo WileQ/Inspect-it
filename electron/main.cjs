@@ -1,4 +1,5 @@
 const { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, safeStorage, screen, shell, Tray } = require('electron');
+const { autostartDir, autostartFilePath, buildAutostartDesktopEntry, isEntryEnabled } = require('./autostart.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -249,6 +250,12 @@ function collapseToBubble() {
 
 function getAutoLaunch() {
   try {
+    if (process.platform === 'linux') {
+      // XDG autostart .desktop entry (setLoginItemSettings is not supported on Linux).
+      const file = autostartFilePath(autostartDir());
+      const content = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+      return isEntryEnabled(content);
+    }
     return app.getLoginItemSettings().openAtLogin;
   } catch {
     return false;
@@ -257,6 +264,24 @@ function getAutoLaunch() {
 
 function setAutoLaunch(enabled) {
   try {
+    if (process.platform === 'linux') {
+      const enabledFlag = Boolean(enabled);
+      const dir = autostartDir();
+      const file = autostartFilePath(dir);
+      if (enabledFlag) {
+        // Prefer the AppImage when running from one; otherwise the packaged binary.
+        const execPath = process.env.APPIMAGE || (app.isPackaged ? process.execPath : null);
+        if (!execPath) {
+          log.warn('Auto-launch unavailable: no packaged binary or AppImage path (development mode).');
+          return false;
+        }
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(file, buildAutostartDesktopEntry(execPath), { mode: 0o644 });
+      } else if (fs.existsSync(file)) {
+        fs.rmSync(file, { force: true });
+      }
+      return getAutoLaunch();
+    }
     app.setLoginItemSettings({ openAtLogin: Boolean(enabled) });
     return getAutoLaunch();
   } catch (error) {
@@ -376,7 +401,10 @@ function focusWindow() {
 }
 
 app.whenReady().then(() => {
-  app.setAppUserModelId('com.inspectthis.desktop');
+  // Windows-only: associates the app with its taskbar identity (no-op elsewhere).
+  if (process.platform === 'win32') {
+    app.setAppUserModelId('com.inspectthis.desktop');
+  }
   createWindow();
   createTray();
   registerAiIpc();
@@ -443,17 +471,26 @@ app.whenReady().then(() => {
     dragOrigin = null;
   });
 
-  const shortcutRegistered = globalShortcut.register('CommandOrControl+Space', () => {
+  // Cmd+Space is reserved by Spotlight on macOS, so macOS defaults to
+  // Control+Space (and falls back to Cmd+Shift+Space if that is also taken).
+  const primaryShortcut = process.platform === 'darwin' ? 'Control+Space' : 'CommandOrControl+Space';
+  const fallbackShortcut = process.platform === 'darwin' ? 'CommandOrControl+Shift+Space' : null;
+  const toggleAction = () => {
     if (expanded) {
       collapseToBubble();
     } else {
       openPanel();
     }
-  });
+  };
+  let shortcutRegistered = globalShortcut.register(primaryShortcut, toggleAction);
+  if (!shortcutRegistered && fallbackShortcut) {
+    log.warn(`Global shortcut ${primaryShortcut} could not be registered on macOS (Spotlight may own it); trying ${fallbackShortcut}.`);
+    shortcutRegistered = globalShortcut.register(fallbackShortcut, toggleAction);
+  }
   if (!shortcutRegistered) {
-    // Another application owns Ctrl/Cmd+Space. Never crash; keep the app usable
+    // Another application owns the shortcut. Never crash; keep the app usable
     // through the bubble and the tray.
-    log.warn('Global shortcut Ctrl/Cmd+Space could not be registered (another application may own it).');
+    log.warn('Global shortcut could not be registered (another application may own it).');
   }
 
   ipcMain.handle('inspect-this:get-auto-launch', () => getAutoLaunch());
@@ -461,7 +498,10 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  if (!app.isQuitting) {
+  // Standard macOS menu-bar/tray app convention: keep running so the bubble,
+  // tray, and global shortcut stay available. The window is normally hidden,
+  // not closed, so this only fires on unusual teardown.
+  if (process.platform !== 'darwin' && !app.isQuitting) {
     app.quit();
   }
 });

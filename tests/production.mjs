@@ -37,12 +37,34 @@ export async function runProductionTests() {
     assert.equal(pkg.build.appId, 'com.inspectthis.desktop', 'appId');
     assert.ok(pkg.build.win?.target, 'win packaging target configured');
     assert.ok(pkg.build.nsis, 'nsis installer configured');
+    assert.ok(pkg.build.mac?.target, 'mac packaging target configured');
+    assert.ok(pkg.build.linux?.target, 'linux packaging target configured');
+    assert.ok(pkg.build.linux.maintainer, 'linux maintainer configured (required by deb)');
     assert.ok(pkg.devDependencies['electron-builder'], 'electron-builder installed');
     assert.ok(pkg.devDependencies.electron, 'electron is a devDependency');
     assert.equal(pkg.dependencies.electron, undefined, 'electron not a runtime dependency');
-    for (const script of ['dev', 'build', 'test', 'package', 'dist']) {
+    for (const script of ['dev', 'build', 'test', 'package', 'dist', 'dist:win', 'dist:mac', 'dist:linux']) {
       assert.equal(typeof pkg.scripts[script], 'string', `script ${script} present`);
     }
+    const linuxTargets = String(pkg.build.linux.target).toLowerCase();
+    assert.ok(linuxTargets.includes('appimage'), 'linux AppImage target configured');
+    assert.ok(linuxTargets.includes('deb'), 'linux deb target configured');
+    const macTargets = String(pkg.build.mac.target).toLowerCase();
+    assert.ok(macTargets.includes('dmg'), 'mac dmg target configured');
+  }
+
+  // --- Cross-platform desktop shell -----------------------------------------
+  {
+    const main = read('electron/main.cjs');
+    // Windows-only API guarded, not called unconditionally.
+    assert.ok(main.includes("process.platform === 'win32'"), 'main.cjs guards Windows-only APIs');
+    assert.ok(main.includes("globalShortcut.register(primaryShortcut"), 'main.cjs uses a per-platform shortcut');
+    assert.ok(main.includes("'darwin'") || main.includes('"darwin"'), 'main.cjs handles macOS');
+    assert.ok(main.includes('./autostart.cjs'), 'main.cjs uses the Linux autostart module');
+    assert.ok(exists('electron/autostart.cjs'), 'Linux autostart module exists');
+    assert.ok(exists('.github/workflows/build.yml'), 'CI workflow exists for cross-platform builds');
+    const workflow = read('.github/workflows/build.yml');
+    assert.ok(workflow.includes('windows-latest') && workflow.includes('macos-latest') && workflow.includes('ubuntu-latest'), 'CI matrix covers Windows, macOS, and Linux');
   }
 
   // --- Content Security Policy ----------------------------------------------
@@ -123,6 +145,25 @@ export async function runProductionTests() {
         assert.equal(match, null, `${relative} contains an absolute machine path (${pattern})`);
       }
     }
+  }
+
+  // --- Linux autostart entry (pure builder) ---------------------------------
+  {
+    const { buildAutostartDesktopEntry, autostartDir, autostartFilePath, isEntryEnabled, AUTOSTART_FILE_NAME } = await import('../electron/autostart.cjs');
+    const entry = buildAutostartDesktopEntry('/opt/Inspect This/Inspect This.AppImage');
+    assert.ok(entry.includes('[Desktop Entry]'), 'desktop entry header');
+    assert.ok(entry.includes('Type=Application'), 'desktop entry type');
+    assert.ok(entry.includes('Exec="/opt/Inspect This/Inspect This.AppImage"'), 'exec path quoted and escaped');
+    assert.ok(entry.includes('X-GNOME-Autostart-enabled=true'), 'autostart enabled marker');
+    assert.equal(isEntryEnabled(entry), true, 'enabled entry detected');
+    assert.equal(isEntryEnabled('[Desktop Entry]\nHidden=true\n'), false, 'disabled entry detected');
+    assert.equal(AUTOSTART_FILE_NAME, 'inspect-this.desktop', 'autostart file name');
+    const normalize = (value) => value.replace(/\\/g, '/');
+    const dir = autostartDir({ XDG_CONFIG_HOME: '/tmp/custom' }, '/home/test');
+    assert.ok(normalize(dir).endsWith('/tmp/custom/autostart'), 'XDG_CONFIG_HOME honored');
+    const defaultDir = autostartDir({}, '/home/test');
+    assert.ok(normalize(defaultDir).endsWith('/home/test/.config/autostart'), 'default autostart dir');
+    assert.ok(autostartFilePath(defaultDir).endsWith('inspect-this.desktop'), 'autostart file path');
   }
 
   console.log('Milestone 05 production-readiness tests passed.');

@@ -16,7 +16,11 @@
     "dist": "electron-builder",
     "dist:win": "electron-builder --win nsis",
     "prepackage": "npm run build",
-    "predist": "npm run build"
+    "predist": "npm run build",
+    "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux",
+    "package:mac": "electron-builder --mac --dir",
+    "package:linux": "electron-builder --linux --dir"
   },
   "dependencies": {
     "fast-xml-parser": "^5.11.0",
@@ -82,24 +86,22 @@
     },
     "mac": {
       "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        }
+        "dmg",
+        "zip"
       ],
       "icon": "build/icon.png",
       "category": "public.app-category.utilities"
     },
     "linux": {
       "target": [
-        "AppImage"
+        "AppImage",
+        "deb"
       ],
       "icon": "build/icon.png",
       "category": "Utility",
-      "synopsis": "Privacy-first digital-object analyzer"
+      "synopsis": "Privacy-first digital-object analyzer",
+      "maintainer": "Inspect This contributors",
+      "executableName": "inspect-this"
     }
   }
 }
