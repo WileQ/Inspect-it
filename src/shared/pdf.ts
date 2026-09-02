@@ -359,20 +359,33 @@ export function pdfPageCount(source: string): number {
  * rendering. Bounded by image count and scan window. Returns JPEG byte blobs
  * (starting with the FFD8 SOI marker).
  */
-export function extractPdfJpegs(bytes: Uint8Array, maxImages = 12, maxBytesPerImage = 8 * 1024 * 1024): Uint8Array[] {
+/** Backwards-compatible JPEG-only page-image extractor. */
+export function extractPdfJpegs(bytes: Uint8Array, maxImages = 12): Uint8Array[] {
+  return extractPdfPageImages(bytes, maxImages)
+    .filter((image) => image.kind === 'jpeg')
+    .map((image) => image.bytes);
+}
+
+export interface PdfPageImage {
+  kind: 'jpeg' | 'png';
+  bytes: Uint8Array;
+}
+
+/**
+ * Extract page images from a scanned PDF. Supports JPEG (DCTDecode) images -
+ * the common scanner output - and PNG (FlateDecode) images, so OCR never
+ * depends on one encoder/decoder. Bounded by image count and scan window.
+ */
+export function extractPdfPageImages(bytes: Uint8Array, maxImages = 12, maxBytesPerImage = 8 * 1024 * 1024): PdfPageImage[] {
   const text = new TextDecoder('latin1', { fatal: false }).decode(bytes.slice(0, FALLBACK_SCAN_BYTES));
-  const out: Uint8Array[] = [];
+  const out: PdfPageImage[] = [];
   const imageRe = /\/Subtype\s*\/Image\b/g;
   let match: RegExpExecArray | null;
   while ((match = imageRe.exec(text)) !== null && out.length < maxImages) {
-    // The image dictionary sits between the /Subtype /Image keyword and the
-    // stream keyword. It must declare a DCTDecode filter (a JPEG image).
     const startIndex = match.index;
     const streamPos = text.indexOf('stream', startIndex);
     if (streamPos === -1 || streamPos - startIndex > 8000) continue;
     const dict = text.slice(startIndex, streamPos);
-    if (!/\/Filter\s*(\/DCTDecode|\[[^\]]*\/DCTDecode)/.test(dict)) continue;
-    // Skip the EOL that normally follows the stream keyword.
     let bodyStart = streamPos + 'stream'.length;
     if (text.startsWith('\r\n', bodyStart)) bodyStart += 2;
     else if (text.startsWith('\n', bodyStart)) bodyStart += 1;
@@ -386,9 +399,21 @@ export function extractPdfJpegs(bytes: Uint8Array, maxImages = 12, maxBytesPerIm
     }
     let end = rawBytes.length;
     while (end > 0 && (rawBytes[end - 1] === 0x0a || rawBytes[end - 1] === 0x0d)) end -= 1;
-    const jpeg = rawBytes.slice(0, end);
-    if (jpeg.length > 0 && jpeg.length <= maxBytesPerImage && jpeg[0] === 0xff && jpeg[1] === 0xd8) {
-      out.push(jpeg);
+    const stream = rawBytes.slice(0, end);
+    if (stream.length === 0 || stream.length > maxBytesPerImage) continue;
+    if (/\/Filter\s*(\/DCTDecode|\[[^\]]*\/DCTDecode)/.test(dict)) {
+      if (stream[0] === 0xff && stream[1] === 0xd8) {
+        out.push({ kind: 'jpeg', bytes: stream });
+      }
+    } else if (/\/Filter\s*(\/FlateDecode|\[[^\]]*\/FlateDecode)/.test(dict)) {
+      try {
+        const decoded = unzlibSync(stream);
+        if (decoded.length > 8 && decoded[0] === 0x89 && decoded[1] === 0x50 && decoded[2] === 0x4e && decoded[3] === 0x47) {
+          out.push({ kind: 'png', bytes: decoded });
+        }
+      } catch {
+        // Not a decodable Flate stream; skip this image.
+      }
     }
   }
   return out;

@@ -260,17 +260,18 @@ export function makeOcrTextItem(name = 'ocr-text.png', text = 'HELLO WORLD', sca
   return toItem(name, bytes, 'image/png');
 }
 
-function buildImagePdfItem(imageBytes, width, height, name) {
-  // Builds a single-page PDF whose page renders one DCTDecode (JPEG) image.
-  // Used for the scanned-PDF OCR fixtures.
+function buildImagePdfItem(imageBytes, width, height, name, filter = '/DCTDecode', streamBytes = imageBytes) {
+  // Builds a single-page PDF whose page renders one image XObject with the
+  // given filter. streamBytes is what goes into the stream (for FlateDecode it
+  // is the zlib-compressed payload). Used for the scanned-PDF OCR fixtures.
   const toLatin1 = (value) => [...value].map((char) => String.fromCharCode(char & 0xff)).join('');
-  const imageStream = `<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${imageBytes.length} >>\nstream\n`;
+  const imageStream = `<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter ${filter} /Length ${streamBytes.length} >>\nstream\n`;
   const content = `q ${width} 0 0 ${height} 0 0 cm /Im1 Do Q`;
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
     '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
     `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${width} ${height}] /Resources << /XObject << /Im1 4 0 R >> >> /Contents 5 0 R >>`,
-    imageStream + toLatin1(Buffer.from(imageBytes)) + '\nendstream',
+    imageStream + toLatin1(Buffer.from(streamBytes)) + '\nendstream',
     `<< /Length ${content.length} >>\nstream\n${content}\nendstream`
   ];
   const parts = [latin1Bytes('%PDF-1.4\n')];
@@ -290,12 +291,21 @@ function buildImagePdfItem(imageBytes, width, height, name) {
   return toItem(name, concatBytes(parts), 'application/pdf');
 }
 
+/**
+ * A scanned PDF whose page image is a PNG (FlateDecode). PNG decoding is
+ * uniform across every tesseract.js-core WASM variant, so this is the
+ * deterministic scanned-PDF OCR fixture (independent of libjpeg quirks).
+ */
 export function makeScannedPdfItem() {
-  // A text bitmap rendered as a JPEG inside a single-page PDF (DCTDecode), so
-  // the scanned-PDF OCR path has a real image to extract and recognize.
-  const { data, width, height } = renderTextRgba('HELLO WORLD', { scale: 10, pad: 24 });
+  const { bytes: png, width, height } = renderTextPng('HELLO WORLD', { scale: 12, pad: 24 });
+  return buildImagePdfItem(png, width, height, 'scanned.pdf', '/FlateDecode', zlibSync(png));
+}
+
+/** A scanned PDF whose page image is a JPEG (DCTDecode), like real scanners. */
+export function makeJpegScannedPdfItem() {
+  const { data, width, height } = renderTextRgba('HELLO WORLD', { scale: 12, pad: 24 });
   const jpeg = Buffer.from(encodeJpeg({ data: Buffer.from(data), width, height }, 92).data);
-  return buildImagePdfItem(jpeg, width, height, 'scanned.pdf');
+  return buildImagePdfItem(jpeg, width, height, 'scanned-jpeg.pdf', '/DCTDecode', jpeg);
 }
 
 export function makeCorruptScannedPdfItem() {
@@ -307,7 +317,7 @@ export function makeCorruptScannedPdfItem() {
   garbage[0] = 0xff;
   garbage[1] = 0xd8;
   for (let index = 2; index < garbage.length; index += 1) garbage[index] = 0xab;
-  return buildImagePdfItem(garbage, 64, 64, 'corrupt-scan.pdf');
+  return buildImagePdfItem(garbage, 64, 64, 'corrupt-scan.pdf', '/DCTDecode', garbage);
 }
 
 export function makeInvalidPdfItem() {

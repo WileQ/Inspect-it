@@ -26,7 +26,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Node
+      - name: Set up Node (pinned to the supported version)
         uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -47,6 +47,10 @@ jobs:
 
       - name: Test suite
         run: npm test
+        env:
+          # OCR diagnostics surface the exact engine state if Milestone 06
+          # fails in CI (image format, normalization, lang/core paths, outcome).
+          INSPECT_THIS_OCR_DEBUG: '1'
 
       # Build commands bake in `--publish never` (see package.json scripts), so
       # electron-builder never implicitly publishes to GitHub from a tag. Each
@@ -113,6 +117,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Set up Node (pinned to the supported version)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Verify tag matches package.json version
         run: node scripts/check-release-version.mjs "${{ github.ref_name }}"
 

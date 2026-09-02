@@ -54,6 +54,20 @@ export interface OcrBridgeResult {
 
 import { decodeJpegToPng, looksLikeJpeg } from './image-codec.ts';
 
+/**
+ * Diagnostics for OCR runs. Gated behind INSPECT_THIS_OCR_DEBUG so normal
+ * operation stays quiet; CI enables it to surface the exact OCR state (image
+ * format, normalization, engine paths, outcome) without printing contents.
+ */
+function ocrDebug(...args: unknown[]): void {
+  const enabled =
+    typeof process !== 'undefined' &&
+    Boolean((process.env as Record<string, string | undefined>)?.INSPECT_THIS_OCR_DEBUG);
+  if (enabled) {
+    console.error('[ocr-debug]', ...args);
+  }
+}
+
 // Variable specifier on purpose: keeps the optional dependency out of the
 // static module graph so the dev server and bundler never try to resolve it.
 const TESSERACT_MODULE = 'tesseract.js';
@@ -264,7 +278,9 @@ export async function ocrImage(bytes: Uint8Array): Promise<OcrOutcome> {
       };
     }
   }
-  if (!(await isOcrAvailable())) {
+  const engineAvailable = await isOcrAvailable();
+  ocrDebug('input format:', looksLikeJpeg(bytes) ? 'jpeg' : 'other', '| normalized to png:', !looksLikeJpeg(work) && looksLikeJpeg(bytes), '| normalized png bytes:', !looksLikeJpeg(work) && looksLikeJpeg(bytes) ? work.length : 'n/a', '| engine available:', engineAvailable);
+  if (!engineAvailable) {
     return {
       available: false,
       provider: 'none',
@@ -292,6 +308,7 @@ export async function ocrImage(bytes: Uint8Array): Promise<OcrOutcome> {
     }
     const worker = await Tesseract.createWorker('eng', 1, options);
     try {
+      ocrDebug('langPath:', String(options.langPath ?? ''), '| cachePath:', String(options.cachePath ?? ''), '| workerPath:', String(options.workerPath ?? ''), '| corePath:', String(options.corePath ?? ''), '| node:', isNodeEnvironment());
       // Node reads a Buffer; the browser reads a (possibly preprocessed) Blob.
       // `work` was normalized above (JPEG -> PNG when possible).
       const input = isNodeEnvironment() ? Buffer.from(work) : await preprocessForOcr(work);
@@ -300,17 +317,20 @@ export async function ocrImage(bytes: Uint8Array): Promise<OcrOutcome> {
       const rawText = (result?.data?.text as string | undefined) ?? '';
       const rawConfidence = typeof result?.data?.confidence === 'number' ? result.data.confidence : undefined;
       const wordData = Array.isArray(result?.data?.words) ? result.data.words as OcrWord[] : undefined;
+      ocrDebug('recognize done | raw text length:', rawText.length, '| confidence:', rawConfidence);
       return outcomeFromRaw(rawText, rawConfidence, wordData, 'tesseract.js');
     } catch (error) {
       await worker.terminate().catch(() => undefined);
       throw error;
     }
   } catch (error) {
+    const message = error instanceof Error ? error.message : 'OCR failed';
+    ocrDebug('OCR failed:', message);
     return {
       available: false,
       provider: 'tesseract.js',
       text: '',
-      message: error instanceof Error ? `OCR failed: ${error.message}` : 'OCR failed'
+      message
     };
   }
 }

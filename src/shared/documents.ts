@@ -1,6 +1,6 @@
 import JSZip from 'jszip';
 import { isOcrAvailable, ocrImage } from './ocr.ts';
-import { extractPdfJpegs, extractPdfMetadataFromRaw, extractPdfStreamText, extractPdfText, pdfPageCount } from './pdf.ts';
+import { extractPdfMetadataFromRaw, extractPdfPageImages, extractPdfStreamText, extractPdfText, pdfPageCount } from './pdf.ts';
 import { analyzeEmailFile } from './email.ts';
 import { analyzeEpubFile } from './ebook.ts';
 import type { AnalysisResult, AnalysisSection, Evidence, Finding, InspectionFile } from './types.ts';
@@ -181,17 +181,18 @@ export async function analyzePdfFile(file: InspectionFile, options: { signal: Ab
     evidenceList.push(evidence('pdf-embedded-count', 'Embedded file attachments', formatNumber(embeddedFiles)));
   }
   const ocrAvailable = await isOcrAvailable();
-  // Local OCR for image-only ("scanned") PDFs: extract embedded JPEG page
-  // images and run the same OCR pipeline used for images. Bounded to the first
-  // 12 page images and 60 pages so a huge scan cannot stall the inspection.
+  // Local OCR for image-only ("scanned") PDFs: extract embedded page images
+  // (JPEG DCTDecode and PNG FlateDecode) and run the same OCR pipeline used
+  // for images. Bounded to the first 12 page images and 60 pages so a huge
+  // scan cannot stall the inspection.
   const ocrPages: Array<{ page: number; text: string; confidence?: number }> = [];
   let ocrImageCount = 0;
   if (scannedLikely && ocrAvailable && pageCount > 0 && pageCount <= 60) {
-    const jpegs = extractPdfJpegs(bytes, 12);
-    ocrImageCount = jpegs.length;
-    for (let index = 0; index < jpegs.length; index += 1) {
+    const pageImages = extractPdfPageImages(bytes, 12);
+    ocrImageCount = pageImages.length;
+    for (let index = 0; index < pageImages.length; index += 1) {
       ensureNotAborted(options.signal);
-      const outcome = await ocrImage(jpegs[index]);
+      const outcome = await ocrImage(pageImages[index].bytes);
       if (outcome.available && outcome.text.trim()) {
         ocrPages.push({ page: index + 1, text: outcome.text.trim(), confidence: outcome.confidence });
       }
