@@ -25,6 +25,7 @@ import {
   makeOcrTextItem,
   makeScannedPdfItem
 } from './fixtures.mjs';
+import { renderTextPng } from './ocr-font.mjs';
 
 const signal = new AbortController().signal;
 
@@ -41,6 +42,14 @@ async function diagnoseScannedPdf(makeItem, label) {
   const item = await makeItem();
   const pdfBytes = new Uint8Array(await item.file.arrayBuffer());
   const images = extractPdfPageImages(pdfBytes, 12);
+  if (label === 'png') {
+    // Report the PNG bytes BEFORE they are embedded, to separate a generator
+    // problem from a PDF-assembly or extraction problem in CI.
+    const generated = renderTextPng('HELLO WORLD', { scale: 12, pad: 24 });
+    console.error(
+      `[milestone06][png] generated PNG head=[${Array.from(generated.bytes.slice(0, 4)).map((b) => b.toString(16).padStart(2, '0')).join(' ')}] size=${generated.bytes.length}`
+    );
+  }
   console.error(`[milestone06][${label}] pdf name=${item.name} size=${pdfBytes.length} images=${images.length}`);
   console.error(`[milestone06][${label}] streams: ${diagnosePdfImageStreams(pdfBytes).join(' | ')}`);
   for (const image of images) {

@@ -367,29 +367,56 @@ function isPngMagic(bytes: Uint8Array): boolean {
 }
 
 /**
- * Extract page images from a scanned PDF by scanning every stream and testing
- * the decoded content: raw JPEG streams start with the FFD8 SOI marker and
- * FlateDecode-compressed PNG streams decompress to PNG magic bytes. This avoids
- * fragile image-dictionary / filter regexes entirely. Bounded by image count
- * and a stream scan ceiling.
+ * Byte-level scan helpers. The PDF is never decoded to a string here: stream
+ * boundaries are located in the raw bytes and content is sliced as bytes, so
+ * extraction is immune to any TextDecoder/string-encoding behaviour.
+ */
+function indexOfAscii(bytes: Uint8Array, needle: string, from = 0): number {
+  const target = Uint8Array.from(needle, (ch) => ch.charCodeAt(0));
+  outer: for (let i = from; i + target.length <= bytes.length; i += 1) {
+    for (let j = 0; j < target.length; j += 1) {
+      if (bytes[i + j] !== target[j]) continue outer;
+    }
+    return i;
+  }
+  return -1;
+}
+
+const PNG_SIGNATURE = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+/**
+ * Extract page images from a scanned PDF by scanning the raw bytes for every
+ * `stream`...`endstream` pair and testing the decoded content:
+ *   - raw JPEG streams start with the FFD8 SOI marker,
+ *   - FlateDecode PNG streams decompress to the PNG signature,
+ *   - raw PNG streams carry the PNG signature directly.
+ * No string decoding is involved, so byte values are preserved exactly on every
+ * platform and Node version.
  */
 export function extractPdfPageImages(bytes: Uint8Array, maxImages = 12, maxBytesPerImage = 8 * 1024 * 1024): PdfPageImage[] {
-  const text = new TextDecoder('latin1', { fatal: false }).decode(bytes.slice(0, FALLBACK_SCAN_BYTES));
   const out: PdfPageImage[] = [];
-  const streamRe = /stream\r?\n([\s\S]*?)endstream/g;
-  let match: RegExpExecArray | null;
+  const limit = Math.min(bytes.length, FALLBACK_SCAN_BYTES);
+  let searchFrom = 0;
   let scanned = 0;
-  while ((match = streamRe.exec(text)) !== null && out.length < maxImages && scanned < 2000) {
-    scanned += 1;
-    const raw = match[1];
-    if (!raw.length) continue;
-    const rawBytes = new Uint8Array(raw.length);
-    for (let index = 0; index < raw.length; index += 1) {
-      rawBytes[index] = raw.charCodeAt(index) & 0xff;
+  while (out.length < maxImages && scanned < 2000) {
+    const streamStart = indexOfAscii(bytes, 'stream', searchFrom);
+    if (streamStart === -1) break;
+    // Require an EOL after the keyword, then find the first endstream after it.
+    let bodyStart = streamStart + 'stream'.length;
+    if (bodyStart < limit && (bytes[bodyStart] === 0x0d || bytes[bodyStart] === 0x0a)) {
+      if (bytes[bodyStart] === 0x0d && bodyStart + 1 < limit && bytes[bodyStart + 1] === 0x0a) bodyStart += 2;
+      else bodyStart += 1;
+    } else {
+      searchFrom = streamStart + 1;
+      continue;
     }
-    let end = rawBytes.length;
-    while (end > 0 && (rawBytes[end - 1] === 0x0a || rawBytes[end - 1] === 0x0d)) end -= 1;
-    const stream = rawBytes.slice(0, end);
+    const endIndex = indexOfAscii(bytes, 'endstream', bodyStart);
+    if (endIndex === -1) break;
+    scanned += 1;
+    searchFrom = endIndex + 1;
+    let end = endIndex;
+    while (end > bodyStart && (bytes[end - 1] === 0x0a || bytes[end - 1] === 0x0d)) end -= 1;
+    const stream = bytes.slice(bodyStart, end);
     if (stream.length === 0 || stream.length > maxBytesPerImage) continue;
     // 1) Raw JPEG (DCTDecode streams are stored uncompressed).
     if (stream.length >= 2 && stream[0] === 0xff && stream[1] === 0xd8) {
@@ -411,7 +438,7 @@ export function extractPdfPageImages(bytes: Uint8Array, maxImages = 12, maxBytes
       out.push({ kind: 'png', bytes: decoded });
       continue;
     }
-    // 3) Raw PNG stored without compression (detected by magic bytes only, so
+    // 3) Raw PNG stored without compression (detected by signature only, so
     // this path never depends on deflate decompression).
     if (isPngMagic(stream)) {
       out.push({ kind: 'png', bytes: stream });
@@ -427,24 +454,39 @@ export function extractPdfJpegs(bytes: Uint8Array, maxImages = 12): Uint8Array[]
     .map((image) => image.bytes);
 }
 
+function headHex(bytes: Uint8Array, n = 4): string {
+  return Array.from(bytes.slice(0, n))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join(' ');
+}
+
 /**
  * Diagnostic helper (CI only): reports what every PDF stream looks like so a
  * scanned-PDF OCR failure can be pinpointed without dumping file contents.
  */
 export function diagnosePdfImageStreams(bytes: Uint8Array): string[] {
-  const text = new TextDecoder('latin1', { fatal: false }).decode(bytes.slice(0, FALLBACK_SCAN_BYTES));
   const out: string[] = [];
-  const streamRe = /stream\r?\n([\s\S]*?)endstream/g;
-  let match: RegExpExecArray | null;
+  const limit = Math.min(bytes.length, FALLBACK_SCAN_BYTES);
+  let searchFrom = 0;
   let index = 0;
-  while ((match = streamRe.exec(text)) !== null && index < 2000) {
+  while (index < 2000) {
+    const streamStart = indexOfAscii(bytes, 'stream', searchFrom);
+    if (streamStart === -1) break;
+    let bodyStart = streamStart + 'stream'.length;
+    if (bodyStart < limit && (bytes[bodyStart] === 0x0d || bytes[bodyStart] === 0x0a)) {
+      if (bytes[bodyStart] === 0x0d && bodyStart + 1 < limit && bytes[bodyStart + 1] === 0x0a) bodyStart += 2;
+      else bodyStart += 1;
+    } else {
+      searchFrom = streamStart + 1;
+      continue;
+    }
+    const endIndex = indexOfAscii(bytes, 'endstream', bodyStart);
+    if (endIndex === -1) break;
     index += 1;
-    const raw = match[1];
-    const rawBytes = new Uint8Array(raw.length);
-    for (let i = 0; i < raw.length; i += 1) rawBytes[i] = raw.charCodeAt(i) & 0xff;
-    let end = rawBytes.length;
-    while (end > 0 && (rawBytes[end - 1] === 0x0a || rawBytes[end - 1] === 0x0d)) end -= 1;
-    const stream = rawBytes.slice(0, end);
+    searchFrom = endIndex + 1;
+    let end = endIndex;
+    while (end > bodyStart && (bytes[end - 1] === 0x0a || bytes[end - 1] === 0x0d)) end -= 1;
+    const stream = bytes.slice(bodyStart, end);
     let decoded = null;
     let errorMessage = '';
     try {
@@ -457,11 +499,11 @@ export function diagnosePdfImageStreams(bytes: Uint8Array): string[] {
         errorMessage = error instanceof Error ? error.message : String(error);
       }
     }
-    const head = stream.length >= 4 ? Array.from(stream.slice(0, 4)).map((b) => b.toString(16).padStart(2, '0')).join(' ') : '';
+    const isPng = stream.length >= 8 && PNG_SIGNATURE.every((b, i) => stream[i] === b);
     out.push(
-      `stream#${index} rawBytes=${stream.length} head=[${head}]` +
+      `stream#${index} rawBytes=${stream.length} head=[${headHex(stream)}]` +
         ` jpeg=${stream.length >= 2 && stream[0] === 0xff && stream[1] === 0xd8}` +
-        ` pngRaw=${isPngMagic(stream)}` +
+        ` pngRaw=${isPng}` +
         ` decompressOk=${decoded !== null}` +
         (decoded ? ` decodedBytes=${decoded.length} png=${isPngMagic(decoded)}` : ` decompressErr=${errorMessage.slice(0, 80) || 'n/a'}`)
     );
