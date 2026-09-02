@@ -185,8 +185,10 @@ export async function analyzePdfFile(file: InspectionFile, options: { signal: Ab
   // images and run the same OCR pipeline used for images. Bounded to the first
   // 12 page images and 60 pages so a huge scan cannot stall the inspection.
   const ocrPages: Array<{ page: number; text: string; confidence?: number }> = [];
+  let ocrImageCount = 0;
   if (scannedLikely && ocrAvailable && pageCount > 0 && pageCount <= 60) {
     const jpegs = extractPdfJpegs(bytes, 12);
+    ocrImageCount = jpegs.length;
     for (let index = 0; index < jpegs.length; index += 1) {
       ensureNotAborted(options.signal);
       const outcome = await ocrImage(jpegs[index]);
@@ -322,6 +324,20 @@ export async function analyzePdfFile(file: InspectionFile, options: { signal: Ab
       methodology: 'anomaly',
       confidence: 'high',
       category: 'metadata'
+    });
+  }
+  if (ocrImageCount > 0 && ocrPages.length === 0) {
+    // OCR ran but could not decode any embedded page image. Report the degraded
+    // state honestly instead of fabricating text.
+    unusual.push({
+      id: 'pdf-ocr-unreadable',
+      title: 'OCR could not read page images',
+      summary: `OCR was attempted on ${formatNumber(ocrImageCount)} embedded page image(s) but none could be decoded locally; no text was fabricated.`,
+      severity: 'low',
+      evidence: ['pdf-images'],
+      methodology: 'fact',
+      confidence: 'high',
+      category: 'structure'
     });
   }
   if (ocrPages.length) {

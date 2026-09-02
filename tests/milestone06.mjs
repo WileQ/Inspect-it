@@ -7,7 +7,9 @@
 import assert from 'node:assert/strict';
 import { analyzeItem } from '../src/shared/analyzers.ts';
 import { isOcrAvailable, ocrImage, validateOcrText } from '../src/shared/ocr.ts';
-import { makeOcrTextItem, makeScannedPdfItem } from './fixtures.mjs';
+import { decodeJpegToPng, jpegDimensions, looksLikeJpeg } from '../src/shared/image-codec.ts';
+import { extractPdfJpegs } from '../src/shared/pdf.ts';
+import { makeCorruptScannedPdfItem, makeOcrTextItem, makeScannedPdfItem } from './fixtures.mjs';
 
 const signal = new AbortController().signal;
 
@@ -71,6 +73,36 @@ export async function runMilestoneSixTests() {
     assert.equal(validateOcrText('x7q 9', 45).accepted, false, 'single low-confidence word rejected');
     assert.equal(validateOcrText('The quick brown fox', 25).accepted, false, 'very low confidence rejected');
     assert.equal(validateOcrText('').accepted, false, 'empty output rejected');
+  }
+
+  // --- JPEG normalization (deterministic OCR across WASM/libjpeg variants) ----
+  {
+    const pdfItem = await makeScannedPdfItem();
+    const bytes = new Uint8Array(await pdfItem.file.arrayBuffer());
+    const jpegs = extractPdfJpegs(bytes, 12);
+    assert.equal(jpegs.length, 1, 'scanned PDF contains one embedded JPEG');
+    const jpeg = jpegs[0];
+    assert.equal(looksLikeJpeg(jpeg), true, 'embedded stream is a JPEG');
+    const dims = jpegDimensions(jpeg);
+    assert.ok(dims && dims.width > 0 && dims.height > 0, 'JPEG dimensions readable without full decode');
+    const png = await decodeJpegToPng(jpeg);
+    assert.ok(png && png.length > 0, 'JPEG normalized to PNG locally');
+    assert.equal(looksLikeJpeg(png), false, 'normalized output is not a JPEG (it is PNG)');
+    // Garbage that merely starts with the JPEG SOI must NOT normalize.
+    const garbage = new Uint8Array(2 + 16);
+    garbage[0] = 0xff;
+    garbage[1] = 0xd8;
+    assert.equal(await decodeJpegToPng(garbage), null, 'corrupt JPEG yields no normalized image');
+  }
+
+  // --- Corrupt embedded page image: no fabricated OCR text --------------------
+  {
+    const result = await analyzeItem(await makeCorruptScannedPdfItem(), { signal });
+    assert.equal(result.evidence.some((entry) => entry.id === 'pdf-ocr-text'), false, 'corrupt page image yields no OCR text evidence');
+    assert.ok(!(result.evidence.some((entry) => entry.id === 'pdf-ocr-text' && entry.value.trim())), 'no fabricated OCR text for a corrupt image');
+    assert.equal(hasFinding(result, 'pdf-ocr-unreadable'), true, 'OCR failure is reported honestly (degraded, not silent)');
+    const recovered = result.unusual.find((finding) => finding.id === 'pdf-ocr-text-recovered');
+    assert.equal(recovered, undefined, 'no "text recovered" claim for a corrupt image');
   }
 
   console.log('Milestone 06 OCR tests passed.');

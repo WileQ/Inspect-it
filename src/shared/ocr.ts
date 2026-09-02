@@ -52,6 +52,8 @@ export interface OcrBridgeResult {
   message?: string;
 }
 
+import { decodeJpegToPng, looksLikeJpeg } from './image-codec.ts';
+
 // Variable specifier on purpose: keeps the optional dependency out of the
 // static module graph so the dev server and bundler never try to resolve it.
 const TESSERACT_MODULE = 'tesseract.js';
@@ -233,10 +235,17 @@ function outcomeFromRaw(rawText: string, rawConfidence: number | undefined, word
  * fake text) when the engine or its assets are missing.
  */
 export async function ocrImage(bytes: Uint8Array): Promise<OcrOutcome> {
+  // Normalize JPEGs to PNG up front (applies to the desktop main-process
+  // bridge AND the local engines): tesseract.js-core's libjpeg (leptonica)
+  // rejects some JPEGs on certain SIMD/relaxed-SIMD WASM variants, while PNG
+  // decoding (libpng) is uniform across all of them. Decoding stays fully
+  // local. If a JPEG cannot be decoded locally we fall back to the original
+  // bytes and let the engine try (or fail honestly).
+  const work = looksLikeJpeg(bytes) ? (await decodeJpegToPng(bytes)) ?? bytes : bytes;
   const bridge = desktopBridge();
   if (bridge) {
     try {
-      const result = await bridge.run(bytes);
+      const result = await bridge.run(work);
       if (result.ok) {
         return outcomeFromRaw(result.text ?? '', result.confidence, result.words, 'tesseract.js (desktop)');
       }
@@ -284,7 +293,8 @@ export async function ocrImage(bytes: Uint8Array): Promise<OcrOutcome> {
     const worker = await Tesseract.createWorker('eng', 1, options);
     try {
       // Node reads a Buffer; the browser reads a (possibly preprocessed) Blob.
-      const input = isNodeEnvironment() ? Buffer.from(bytes) : await preprocessForOcr(bytes);
+      // `work` was normalized above (JPEG -> PNG when possible).
+      const input = isNodeEnvironment() ? Buffer.from(work) : await preprocessForOcr(work);
       const result = await worker.recognize(input);
       await worker.terminate();
       const rawText = (result?.data?.text as string | undefined) ?? '';

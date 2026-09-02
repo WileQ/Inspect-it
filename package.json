@@ -34,7 +34,8 @@
     "react-dom": "^18.3.1",
     "sql.js": "^1.14.2",
     "tesseract.js": "^7.0.0",
-    "tesseract.js-core": "^7.0.0"
+    "tesseract.js-core": "^7.0.0",
+    "jpeg-js": "^0.4.4"
   },
   "devDependencies": {
     "@types/node": "^22.15.29",
@@ -43,7 +44,6 @@
     "@vitejs/plugin-react": "^4.5.2",
     "electron": "^33.2.0",
     "electron-builder": "^26.15.3",
-    "jpeg-js": "^0.4.4",
     "typescript": "^5.8.3",
     "vite": "^6.2.1",
     "vitest": "^2.1.9"
