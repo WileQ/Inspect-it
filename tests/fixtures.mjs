@@ -261,37 +261,42 @@ export function makeOcrTextItem(name = 'ocr-text.png', text = 'HELLO WORLD', sca
 }
 
 function buildImagePdfItem(imageBytes, width, height, name, filter = null, streamBytes = imageBytes) {
-  // Builds a single-page PDF whose page renders one image XObject. `filter` is
-  // the optional PDF filter name (e.g. /DCTDecode); when null the stream is
-  // stored raw. `streamBytes` is what goes into the stream. Used for the
-  // scanned-PDF OCR fixtures.
-  const toLatin1 = (value) => [...value].map((char) => String.fromCharCode(char & 0xff)).join('');
+  // Byte-safe PDF assembly: text segments are encoded with TextEncoder and the
+  // image bytes are appended DIRECTLY as raw bytes - never routed through a JS
+  // string. Bytes >= 0x80 (e.g. the PNG 0x89 signature byte) are therefore
+  // preserved exactly on every Node version/platform (a latin1 string
+  // round-trip corrupted 0x89 -> 0x30 on Node 22.23 in CI).
+  const enc = new TextEncoder();
+  const bytes = (value) => enc.encode(value);
+  const raw = streamBytes instanceof Uint8Array ? streamBytes : Uint8Array.from(streamBytes);
   const filterPart = filter ? ` /Filter ${filter}` : '';
-  const imageStream = `<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceRGB /BitsPerComponent 8${filterPart} /Length ${streamBytes.length} >>\nstream\n`;
+  const imageDict = `<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceRGB /BitsPerComponent 8${filterPart} /Length ${raw.length} >>\nstream\n`;
   const content = `q ${width} 0 0 ${height} 0 0 cm /Im1 Do Q`;
-  const objects = [
-    '<< /Type /Catalog /Pages 2 0 R >>',
-    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${width} ${height}] /Resources << /XObject << /Im1 4 0 R >> >> /Contents 5 0 R >>`,
-    imageStream + toLatin1(Buffer.from(streamBytes)) + '\nendstream',
-    `<< /Length ${content.length} >>\nstream\n${content}\nendstream`
+  // Object bodies (image stream = dict text + RAW image bytes + endstream).
+  const objectBodies = [
+    bytes('<< /Type /Catalog /Pages 2 0 R >>'),
+    bytes('<< /Type /Pages /Kids [3 0 R] /Count 1 >>'),
+    bytes(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${width} ${height}] /Resources << /XObject << /Im1 4 0 R >> >> /Contents 5 0 R >>`),
+    concatBytes([bytes(imageDict), raw, bytes('\nendstream')]),
+    bytes(`<< /Length ${content.length} >>\nstream\n${content}\nendstream`)
   ];
-  const parts = [latin1Bytes('%PDF-1.4\n')];
+  const parts = [bytes('%PDF-1.4\n')];
   const offsets = [0];
-  objects.forEach((obj, index) => {
+  objectBodies.forEach((body, index) => {
     offsets.push(parts.reduce((acc, part) => acc + part.length, 0));
-    parts.push(latin1Bytes(`${index + 1} 0 obj\n${obj}\nendobj\n`));
+    parts.push(concatBytes([bytes(`${index + 1} 0 obj\n`), body, bytes('\nendobj\n')]));
   });
   const xrefStart = parts.reduce((acc, part) => acc + part.length, 0);
-  let xref = `xref\n0 ${objects.length + 1}\n`;
+  let xref = `xref\n0 ${objectBodies.length + 1}\n`;
   xref += '0000000000 65535 f \n';
-  for (let index = 1; index <= objects.length; index += 1) {
+  for (let index = 1; index <= objectBodies.length; index += 1) {
     xref += offsets[index].toString().padStart(10, '0') + ' 00000 n \n';
   }
-  xref += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
-  parts.push(latin1Bytes(xref));
+  xref += `trailer\n<< /Size ${objectBodies.length + 1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
+  parts.push(bytes(xref));
   return toItem(name, concatBytes(parts), 'application/pdf');
 }
+
 
 /**
  * A scanned PDF whose page image is a PNG stored uncompressed in the image
