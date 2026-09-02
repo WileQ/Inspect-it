@@ -155,7 +155,7 @@ export async function runMilestoneSixTests() {
     assert.equal(await decodeJpegToPng(garbage), null, 'corrupt JPEG yields no normalized image');
   }
 
-  // --- PNG scanned PDF extraction (FlateDecode) ------------------------------
+  // --- PNG scanned PDF extraction (raw PNG stream detected by magic) ---------
   {
     const pdfItem = await makeScannedPdfItem();
     const bytes = new Uint8Array(await pdfItem.file.arrayBuffer());

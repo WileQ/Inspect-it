@@ -11,7 +11,7 @@
 //
 // Strictly read-only: the source bytes are never modified.
 
-import { unzlibSync } from 'fflate';
+import { decompressSync, unzlibSync } from 'fflate';
 import { ensureNotAborted, tokenizeWords } from './analysis-utils.ts';
 
 export interface PdfMetadata {
@@ -396,18 +396,23 @@ export function extractPdfPageImages(bytes: Uint8Array, maxImages = 12, maxBytes
       out.push({ kind: 'jpeg', bytes: stream });
       continue;
     }
-    // 2) FlateDecode-compressed PNG.
+    // 2) FlateDecode-compressed PNG (zlib-wrapped or raw deflate).
     let decoded: Uint8Array | null = null;
     try {
       decoded = unzlibSync(stream);
     } catch {
-      decoded = null;
+      try {
+        decoded = decompressSync(stream);
+      } catch {
+        decoded = null;
+      }
     }
     if (decoded && isPngMagic(decoded)) {
       out.push({ kind: 'png', bytes: decoded });
       continue;
     }
-    // 3) Raw PNG stored without compression.
+    // 3) Raw PNG stored without compression (detected by magic bytes only, so
+    // this path never depends on deflate decompression).
     if (isPngMagic(stream)) {
       out.push({ kind: 'png', bytes: stream });
     }
@@ -441,16 +446,24 @@ export function diagnosePdfImageStreams(bytes: Uint8Array): string[] {
     while (end > 0 && (rawBytes[end - 1] === 0x0a || rawBytes[end - 1] === 0x0d)) end -= 1;
     const stream = rawBytes.slice(0, end);
     let decoded = null;
+    let errorMessage = '';
     try {
       decoded = unzlibSync(stream);
-    } catch {
-      decoded = null;
+    } catch (error) {
+      try {
+        decoded = decompressSync(stream);
+      } catch {
+        decoded = null;
+        errorMessage = error instanceof Error ? error.message : String(error);
+      }
     }
+    const head = stream.length >= 4 ? Array.from(stream.slice(0, 4)).map((b) => b.toString(16).padStart(2, '0')).join(' ') : '';
     out.push(
-      `stream#${index} rawBytes=${stream.length}` +
+      `stream#${index} rawBytes=${stream.length} head=[${head}]` +
         ` jpeg=${stream.length >= 2 && stream[0] === 0xff && stream[1] === 0xd8}` +
-        ` zlibOk=${decoded !== null}` +
-        (decoded ? ` decodedBytes=${decoded.length} png=${isPngMagic(decoded)}` : '')
+        ` pngRaw=${isPngMagic(stream)}` +
+        ` decompressOk=${decoded !== null}` +
+        (decoded ? ` decodedBytes=${decoded.length} png=${isPngMagic(decoded)}` : ` decompressErr=${errorMessage.slice(0, 80) || 'n/a'}`)
     );
   }
   return out;

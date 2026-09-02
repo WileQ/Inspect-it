@@ -260,12 +260,14 @@ export function makeOcrTextItem(name = 'ocr-text.png', text = 'HELLO WORLD', sca
   return toItem(name, bytes, 'image/png');
 }
 
-function buildImagePdfItem(imageBytes, width, height, name, filter = '/DCTDecode', streamBytes = imageBytes) {
-  // Builds a single-page PDF whose page renders one image XObject with the
-  // given filter. streamBytes is what goes into the stream (for FlateDecode it
-  // is the zlib-compressed payload). Used for the scanned-PDF OCR fixtures.
+function buildImagePdfItem(imageBytes, width, height, name, filter = null, streamBytes = imageBytes) {
+  // Builds a single-page PDF whose page renders one image XObject. `filter` is
+  // the optional PDF filter name (e.g. /DCTDecode); when null the stream is
+  // stored raw. `streamBytes` is what goes into the stream. Used for the
+  // scanned-PDF OCR fixtures.
   const toLatin1 = (value) => [...value].map((char) => String.fromCharCode(char & 0xff)).join('');
-  const imageStream = `<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter ${filter} /Length ${streamBytes.length} >>\nstream\n`;
+  const filterPart = filter ? ` /Filter ${filter}` : '';
+  const imageStream = `<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceRGB /BitsPerComponent 8${filterPart} /Length ${streamBytes.length} >>\nstream\n`;
   const content = `q ${width} 0 0 ${height} 0 0 cm /Im1 Do Q`;
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
@@ -292,13 +294,16 @@ function buildImagePdfItem(imageBytes, width, height, name, filter = '/DCTDecode
 }
 
 /**
- * A scanned PDF whose page image is a PNG (FlateDecode). PNG decoding is
- * uniform across every tesseract.js-core WASM variant, so this is the
- * deterministic scanned-PDF OCR fixture (independent of libjpeg quirks).
+ * A scanned PDF whose page image is a PNG stored uncompressed in the image
+ * stream. PNG decoding is uniform across every tesseract.js-core WASM variant,
+ * so this is the deterministic scanned-PDF OCR fixture. The stream is NOT
+ * zlib-compressed so the deterministic path never depends on deflate
+ * decompression (which proved environment-sensitive in CI); the extractor
+ * detects the PNG by its magic bytes.
  */
 export function makeScannedPdfItem() {
   const { bytes: png, width, height } = renderTextPng('HELLO WORLD', { scale: 12, pad: 24 });
-  return buildImagePdfItem(png, width, height, 'scanned.pdf', '/FlateDecode', zlibSync(png));
+  return buildImagePdfItem(png, width, height, 'scanned.pdf', null, png);
 }
 
 /** A scanned PDF whose page image is a JPEG (DCTDecode), like real scanners. */
