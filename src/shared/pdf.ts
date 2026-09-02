@@ -353,45 +353,35 @@ export function pdfPageCount(source: string): number {
   return (source.match(/\/Type\s*\/Page\b/g) ?? []).length;
 }
 
-/**
- * Extract embedded JPEG (DCTDecode) image streams from raw PDF bytes. Scanned
- * PDFs usually contain one JPEG per page; these can be OCR'd directly without
- * rendering. Bounded by image count and scan window. Returns JPEG byte blobs
- * (starting with the FFD8 SOI marker).
- */
-/** Backwards-compatible JPEG-only page-image extractor. */
-export function extractPdfJpegs(bytes: Uint8Array, maxImages = 12): Uint8Array[] {
-  return extractPdfPageImages(bytes, maxImages)
-    .filter((image) => image.kind === 'jpeg')
-    .map((image) => image.bytes);
-}
-
 export interface PdfPageImage {
   kind: 'jpeg' | 'png';
   bytes: Uint8Array;
 }
 
+function isPngMagic(bytes: Uint8Array): boolean {
+  return (
+    bytes.length > 8 &&
+    bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 &&
+    bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a
+  );
+}
+
 /**
- * Extract page images from a scanned PDF. Supports JPEG (DCTDecode) images -
- * the common scanner output - and PNG (FlateDecode) images, so OCR never
- * depends on one encoder/decoder. Bounded by image count and scan window.
+ * Extract page images from a scanned PDF by scanning every stream and testing
+ * the decoded content: raw JPEG streams start with the FFD8 SOI marker and
+ * FlateDecode-compressed PNG streams decompress to PNG magic bytes. This avoids
+ * fragile image-dictionary / filter regexes entirely. Bounded by image count
+ * and a stream scan ceiling.
  */
 export function extractPdfPageImages(bytes: Uint8Array, maxImages = 12, maxBytesPerImage = 8 * 1024 * 1024): PdfPageImage[] {
   const text = new TextDecoder('latin1', { fatal: false }).decode(bytes.slice(0, FALLBACK_SCAN_BYTES));
   const out: PdfPageImage[] = [];
-  const imageRe = /\/Subtype\s*\/Image\b/g;
+  const streamRe = /stream\r?\n([\s\S]*?)endstream/g;
   let match: RegExpExecArray | null;
-  while ((match = imageRe.exec(text)) !== null && out.length < maxImages) {
-    const startIndex = match.index;
-    const streamPos = text.indexOf('stream', startIndex);
-    if (streamPos === -1 || streamPos - startIndex > 8000) continue;
-    const dict = text.slice(startIndex, streamPos);
-    let bodyStart = streamPos + 'stream'.length;
-    if (text.startsWith('\r\n', bodyStart)) bodyStart += 2;
-    else if (text.startsWith('\n', bodyStart)) bodyStart += 1;
-    const endIndex = text.indexOf('endstream', bodyStart);
-    if (endIndex === -1) continue;
-    const raw = text.slice(bodyStart, endIndex);
+  let scanned = 0;
+  while ((match = streamRe.exec(text)) !== null && out.length < maxImages && scanned < 2000) {
+    scanned += 1;
+    const raw = match[1];
     if (!raw.length) continue;
     const rawBytes = new Uint8Array(raw.length);
     for (let index = 0; index < raw.length; index += 1) {
@@ -401,20 +391,67 @@ export function extractPdfPageImages(bytes: Uint8Array, maxImages = 12, maxBytes
     while (end > 0 && (rawBytes[end - 1] === 0x0a || rawBytes[end - 1] === 0x0d)) end -= 1;
     const stream = rawBytes.slice(0, end);
     if (stream.length === 0 || stream.length > maxBytesPerImage) continue;
-    if (/\/Filter\s*(\/DCTDecode|\[[^\]]*\/DCTDecode)/.test(dict)) {
-      if (stream[0] === 0xff && stream[1] === 0xd8) {
-        out.push({ kind: 'jpeg', bytes: stream });
-      }
-    } else if (/\/Filter\s*(\/FlateDecode|\[[^\]]*\/FlateDecode)/.test(dict)) {
-      try {
-        const decoded = unzlibSync(stream);
-        if (decoded.length > 8 && decoded[0] === 0x89 && decoded[1] === 0x50 && decoded[2] === 0x4e && decoded[3] === 0x47) {
-          out.push({ kind: 'png', bytes: decoded });
-        }
-      } catch {
-        // Not a decodable Flate stream; skip this image.
-      }
+    // 1) Raw JPEG (DCTDecode streams are stored uncompressed).
+    if (stream.length >= 2 && stream[0] === 0xff && stream[1] === 0xd8) {
+      out.push({ kind: 'jpeg', bytes: stream });
+      continue;
     }
+    // 2) FlateDecode-compressed PNG.
+    let decoded: Uint8Array | null = null;
+    try {
+      decoded = unzlibSync(stream);
+    } catch {
+      decoded = null;
+    }
+    if (decoded && isPngMagic(decoded)) {
+      out.push({ kind: 'png', bytes: decoded });
+      continue;
+    }
+    // 3) Raw PNG stored without compression.
+    if (isPngMagic(stream)) {
+      out.push({ kind: 'png', bytes: stream });
+    }
+  }
+  return out;
+}
+
+/** Backwards-compatible JPEG-only page-image extractor. */
+export function extractPdfJpegs(bytes: Uint8Array, maxImages = 12): Uint8Array[] {
+  return extractPdfPageImages(bytes, maxImages)
+    .filter((image) => image.kind === 'jpeg')
+    .map((image) => image.bytes);
+}
+
+/**
+ * Diagnostic helper (CI only): reports what every PDF stream looks like so a
+ * scanned-PDF OCR failure can be pinpointed without dumping file contents.
+ */
+export function diagnosePdfImageStreams(bytes: Uint8Array): string[] {
+  const text = new TextDecoder('latin1', { fatal: false }).decode(bytes.slice(0, FALLBACK_SCAN_BYTES));
+  const out: string[] = [];
+  const streamRe = /stream\r?\n([\s\S]*?)endstream/g;
+  let match: RegExpExecArray | null;
+  let index = 0;
+  while ((match = streamRe.exec(text)) !== null && index < 2000) {
+    index += 1;
+    const raw = match[1];
+    const rawBytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i += 1) rawBytes[i] = raw.charCodeAt(i) & 0xff;
+    let end = rawBytes.length;
+    while (end > 0 && (rawBytes[end - 1] === 0x0a || rawBytes[end - 1] === 0x0d)) end -= 1;
+    const stream = rawBytes.slice(0, end);
+    let decoded = null;
+    try {
+      decoded = unzlibSync(stream);
+    } catch {
+      decoded = null;
+    }
+    out.push(
+      `stream#${index} rawBytes=${stream.length}` +
+        ` jpeg=${stream.length >= 2 && stream[0] === 0xff && stream[1] === 0xd8}` +
+        ` zlibOk=${decoded !== null}` +
+        (decoded ? ` decodedBytes=${decoded.length} png=${isPngMagic(decoded)}` : '')
+    );
   }
   return out;
 }

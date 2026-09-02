@@ -18,7 +18,7 @@ import path from 'node:path';
 import { analyzeItem } from '../src/shared/analyzers.ts';
 import { isOcrAvailable, ocrImage, validateOcrText } from '../src/shared/ocr.ts';
 import { decodeJpegToPng, jpegDimensions, looksLikeJpeg } from '../src/shared/image-codec.ts';
-import { extractPdfJpegs, extractPdfPageImages } from '../src/shared/pdf.ts';
+import { diagnosePdfImageStreams, extractPdfJpegs, extractPdfPageImages } from '../src/shared/pdf.ts';
 import {
   makeCorruptScannedPdfItem,
   makeJpegScannedPdfItem,
@@ -41,7 +41,8 @@ async function diagnoseScannedPdf(makeItem, label) {
   const item = await makeItem();
   const pdfBytes = new Uint8Array(await item.file.arrayBuffer());
   const images = extractPdfPageImages(pdfBytes, 12);
-  console.error(`[milestone06][${label}] pdf name=${item.name} size=${pdfBytes.length}`);
+  console.error(`[milestone06][${label}] pdf name=${item.name} size=${pdfBytes.length} images=${images.length}`);
+  console.error(`[milestone06][${label}] streams: ${diagnosePdfImageStreams(pdfBytes).join(' | ')}`);
   for (const image of images) {
     const dims = image.kind === 'jpeg' ? jpegDimensions(image.bytes) : null;
     console.error(
