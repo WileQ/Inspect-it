@@ -123,7 +123,7 @@ Provide a browser version of the analysis interface.
 
 However, understand that browser security restrictions mean the browser version cannot have identical filesystem capabilities to the desktop application.
 
-The architecture should share as much code as possible between desktop and browser.
+The architecture should share as much code as possible between desktop as well as browser.
 
 ---
 
