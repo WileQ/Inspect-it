@@ -1,7 +1,7 @@
 {
   "name": "inspect-this",
   "private": false,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -12,15 +12,18 @@
     "test": "node --experimental-strip-types --experimental-specifier-resolution=node tests/run-tests.mjs",
     "test:watch": "node --experimental-strip-types --experimental-specifier-resolution=node tests/run-tests.mjs",
     "icons": "node scripts/generate-icons.mjs",
-    "package": "electron-builder --dir",
-    "dist": "electron-builder",
-    "dist:win": "electron-builder --win nsis",
+    "package": "electron-builder --dir --publish never",
+    "dist": "electron-builder --publish never",
+    "dist:win": "electron-builder --win nsis --publish never",
     "prepackage": "npm run build",
     "predist": "npm run build",
-    "dist:mac": "electron-builder --mac",
-    "dist:linux": "electron-builder --linux",
-    "package:mac": "electron-builder --mac --dir",
-    "package:linux": "electron-builder --linux --dir"
+    "dist:mac": "electron-builder --mac --publish never",
+    "dist:linux": "electron-builder --linux --publish never",
+    "package:mac": "electron-builder --mac --dir --publish never",
+    "package:linux": "electron-builder --linux --dir --publish never",
+    "setup:ocr": "node scripts/setup-ocr.mjs",
+    "predev": "npm run setup:ocr",
+    "prebuild": "npm run setup:ocr"
   },
   "dependencies": {
     "fast-xml-parser": "^5.11.0",
@@ -29,7 +32,9 @@
     "pdfjs-dist": "^6.2.108",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "sql.js": "^1.14.2"
+    "sql.js": "^1.14.2",
+    "tesseract.js": "^7.0.0",
+    "tesseract.js-core": "^7.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.29",
@@ -38,6 +43,7 @@
     "@vitejs/plugin-react": "^4.5.2",
     "electron": "^33.2.0",
     "electron-builder": "^26.15.3",
+    "jpeg-js": "^0.4.4",
     "typescript": "^5.8.3",
     "vite": "^6.2.1",
     "vitest": "^2.1.9"
@@ -61,7 +67,14 @@
       "build/tray.png",
       "package.json",
       "!**/*.map",
-      "!node_modules/**"
+      "!node_modules/**",
+      "node_modules/tesseract.js/**",
+      "!node_modules/tesseract.js/docs/**",
+      "!node_modules/tesseract.js/examples/**",
+      "!node_modules/tesseract.js/scripts/**",
+      "!node_modules/tesseract.js/karma.conf.js",
+      "node_modules/tesseract.js-core/**",
+      "!dist/ocr/core/**"
     ],
     "win": {
       "target": [
@@ -103,12 +116,14 @@
       "category": "Utility",
       "synopsis": "Privacy-first digital-object analyzer",
       "maintainer": "Inspect This contributors",
-      "executableName": "inspect-this"
+      "executableName": "inspect-this",
+      "syncDesktopName": true
     }
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/inspect-this/inspect-this"
   },
-  "homepage": "https://github.com/inspect-this/inspect-this"
+  "homepage": "https://github.com/inspect-this/inspect-this",
+  "desktopName": "inspect-this.desktop"
 }

@@ -16,6 +16,9 @@ contextBridge.exposeInMainWorld('inspectThisDesktop', {
     ipcRenderer.on('inspect-this-mode', listener);
     return () => ipcRenderer.removeListener('inspect-this-mode', listener);
   },
+  ocr: {
+    run: (bytes) => ipcRenderer.invoke('inspect-this:ocr', bytes)
+  },
   ai: {
     chat: (payload) => ipcRenderer.invoke('inspect-this:ai-chat', payload),
     abort: (requestId) => ipcRenderer.invoke('inspect-this:ai-abort', requestId),

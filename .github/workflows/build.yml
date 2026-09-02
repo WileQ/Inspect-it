@@ -18,8 +18,9 @@ jobs:
         os: [windows-latest, macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     env:
-      # Never auto-discover signing identities: signing only happens when the
-      # CSC_LINK secret is configured, so unsigned builds still succeed.
+      # Never auto-discover signing identities. Signing happens ONLY when the
+      # CSC_LINK secret is actually provided (see the guarded export below), so
+      # unsigned builds always succeed.
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:
       - name: Checkout
@@ -31,6 +32,13 @@ jobs:
           node-version: 22
           cache: npm
 
+      # package.json is the single source of truth for the version. If the tag
+      # and package.json disagree (e.g. tag v1.0.1 vs version 1.0.0), fail now
+      # so a release can never carry mismatched artifact/application versions.
+      - name: Verify tag matches package.json version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: node scripts/check-release-version.mjs "${{ github.ref_name }}"
+
       - name: Install dependencies
         run: npm ci
 
@@ -40,27 +48,45 @@ jobs:
       - name: Test suite
         run: npm test
 
+      # Build commands bake in `--publish never` (see package.json scripts), so
+      # electron-builder never implicitly publishes to GitHub from a tag. Each
+      # installer is uploaded as a workflow artifact; the dedicated `release`
+      # job is the ONLY publisher.
       - name: Build Windows installer
         if: runner.os == 'Windows'
-        run: npm run dist:win
-        env:
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-
-      - name: Build macOS app (signed + notarized on release tags when credentials exist)
-        if: runner.os == 'macOS'
+        shell: bash
         run: |
+          if [ -n "$CSC_LINK_VALUE" ]; then export CSC_LINK="$CSC_LINK_VALUE"; fi
+          if [ -n "$CSC_KEY_PASSWORD_VALUE" ]; then export CSC_KEY_PASSWORD="$CSC_KEY_PASSWORD_VALUE"; fi
+          npm run dist:win
+        env:
+          CSC_LINK_VALUE: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD_VALUE: ${{ secrets.CSC_KEY_PASSWORD }}
+
+      - name: Build macOS app (unsigned unless cert provided; notarized on release tags when Apple credentials exist)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          # Only export signing env when the certificate secret is actually set.
+          # electron-builder treats a present-but-empty CSC_LINK as "signing
+          # configured" and fails with "not a file"; leaving it unset produces
+          # a clean ad-hoc (unsigned) build when no certificate is configured.
+          if [ -n "$CSC_LINK_VALUE" ]; then export CSC_LINK="$CSC_LINK_VALUE"; fi
+          if [ -n "$CSC_KEY_PASSWORD_VALUE" ]; then export CSC_KEY_PASSWORD="$CSC_KEY_PASSWORD_VALUE"; fi
+          if [ -n "$APPLE_ID_VALUE" ]; then export APPLE_ID="$APPLE_ID_VALUE"; fi
+          if [ -n "$APPLE_APP_SPECIFIC_PASSWORD_VALUE" ]; then export APPLE_APP_SPECIFIC_PASSWORD="$APPLE_APP_SPECIFIC_PASSWORD_VALUE"; fi
+          if [ -n "$APPLE_TEAM_ID_VALUE" ]; then export APPLE_TEAM_ID="$APPLE_TEAM_ID_VALUE"; fi
           if [ "$NOTARIZE" = "true" ]; then
             npm run dist:mac -- -c.mac.notarize=true
           else
             npm run dist:mac
           fi
         env:
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CSC_LINK_VALUE: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD_VALUE: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID_VALUE: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD_VALUE: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID_VALUE: ${{ secrets.APPLE_TEAM_ID }}
           NOTARIZE: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.APPLE_ID != '' }}
 
       - name: Build Linux packages
@@ -87,6 +113,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Verify tag matches package.json version
+        run: node scripts/check-release-version.mjs "${{ github.ref_name }}"
+
       - name: Download all installers
         uses: actions/download-artifact@v4
         with:
@@ -102,14 +131,14 @@ jobs:
           body: |
             ## Inspect This ${{ github.ref_name }}
 
-            Installers for all platforms (built by CI):
+            Installers for all platforms, attached to this release (version = `${{ github.ref_name }}` without the leading `v`, matching package.json):
 
-            - **Windows x64**: `.exe` installer
+            - **Windows x64**: NSIS installer (`.exe`)
             - **macOS x64 + arm64**: `.dmg` and `.zip`
             - **Linux x64**: `.AppImage` and `.deb`
 
-            See [docs/RELEASING.md](../../docs/RELEASING.md) for the version/tag flow and
-            macOS signing/notarization notes.
+            The version/tag flow and macOS signing/notarization notes live in
+            [docs/RELEASING.md](../../docs/RELEASING.md).
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
         env:

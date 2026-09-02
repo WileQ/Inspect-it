@@ -78,6 +78,18 @@ template images; the current icon is colored and displays as-is.
 - Launch at login: Windows login items.
 - Tray: native; the icon lives in the notification area.
 
+## OCR (local, offline)
+
+OCR runs fully on-device with tesseract.js:
+
+- **Desktop (Electron):** OCR runs in the main process (Node), reading the
+  worker, WASM, and English language data from the packaged app - no network.
+- **Browser:** OCR runs in a web worker using local asset URLs shipped in the
+  build (`/ocr/...`); the English language data is bundled.
+- **Scanned PDFs:** embedded page images (JPEG/DCTDecode) are extracted and
+  OCR'd locally; results appear per page with confidence.
+- Adding another language means adding its `traineddata.gz` to `public/ocr/`.
+
 ## Building per platform
 
 ```bash

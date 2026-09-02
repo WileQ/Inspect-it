@@ -1,12 +1,18 @@
-﻿// Local OCR architecture.
+// Local OCR architecture.
 //
-// OCR is intentionally optional: it must run fully on-device and must not be
-// faked. If a local OCR engine (tesseract.js) is installed, it is used and the
-// output is clearly labelled as OCR-derived with a confidence score. If it is
-// not available, analyzers report that OCR is unavailable instead of inventing
-// text.
+// OCR runs fully on-device with tesseract.js (WASM). All assets (the worker
+// script, tesseract.js-core WASM, and the English language data) are shipped
+// locally - never fetched from a CDN. Three execution paths:
 //
-// No cloud OCR is ever used.
+//   1. Desktop (Electron): OCR runs in the main process (Node) via the
+//      `inspectThisDesktop.ocr` bridge, so it works under file:// with no
+//      renderer fetch restrictions.
+//   2. Browser: OCR runs in a web worker using local asset URLs copied from
+//      public/ocr into the build.
+//   3. Node (tests): OCR runs with the local language data in public/ocr.
+//
+// Output is validated so phantom text from noise/photos is never reported as
+// OCR text, while genuine text (even at moderate Tesseract confidence) is kept.
 
 export interface OcrPage {
   page: number;
@@ -38,70 +44,12 @@ export interface OcrValidation {
   reason: string;
 }
 
-/**
- * Decide whether OCR output is genuinely readable text rather than the
- * phantom/gibberish Tesseract sometimes produces on noise, photos, and
- * graphics. Three independent signals are combined:
- *
- *  1. Meaningful words - tokens must contain letters (or be numeric), and
- *     isolated single characters are dropped.
- *  2. Confidence - word-level confidence when available, otherwise the
- *     overall page confidence; very low confidence is rejected outright.
- *  3. Word count - a single low-confidence token is not enough to claim text.
- *
- * Returns the cleaned text so the UI never shows garbage as OCR output.
- */
-export function validateOcrText(raw: string, overallConfidence?: number, wordData?: OcrWord[]): OcrValidation {
-  const tokens = raw.split(/\s+/).map((token) => token.trim()).filter(Boolean);
-  const words: string[] = [];
-  const confidences: number[] = [];
-  for (const token of tokens) {
-    const cleaned = token.replace(/[^\p{L}\p{N}.'\u2019-]/gu, '');
-    if (!cleaned) continue;
-    const hasLetter = /\p{L}/u.test(cleaned);
-    const isNumeric = /^\d[\d.,]*$/.test(cleaned);
-    if (!hasLetter && !isNumeric) continue;
-    // Drop isolated single characters: Tesseract phantom output is often a
-    // string of single letters/digits ("a b c d"), which is not readable text.
-    if (cleaned.length === 1) continue;
-    words.push(cleaned);
-    if (wordData?.length) {
-      const match = wordData.find((word) => (word.text ?? '').trim().toLowerCase() === token.toLowerCase());
-      if (match && typeof match.confidence === 'number') {
-        confidences.push(match.confidence);
-      }
-    }
-  }
-  let meanConfidence: number | null = null;
-  if (confidences.length) {
-    meanConfidence = confidences.reduce((sum, value) => sum + value, 0) / confidences.length;
-  } else if (overallConfidence !== undefined) {
-    meanConfidence = overallConfidence;
-  }
-  const text = words.join(' ');
-  const wordCount = words.length;
-  let accepted = false;
-  let reason = '';
-  if (wordCount === 0) {
-    reason = 'No readable text found (no meaningful words).';
-  } else if (meanConfidence !== null && meanConfidence < 40) {
-    reason = 'No readable text found (OCR confidence too low: ' + meanConfidence.toFixed(0) + '%).';
-  } else if (wordCount >= 3) {
-    accepted = true;
-    reason = 'Readable text detected.';
-  } else if (wordCount === 2 && meanConfidence !== null && meanConfidence >= 60) {
-    accepted = true;
-    reason = 'Readable text detected.';
-  } else if (wordCount === 1 && meanConfidence !== null && meanConfidence >= 80) {
-    accepted = true;
-    reason = 'Readable text detected.';
-  } else if (meanConfidence === null && wordCount >= 2) {
-    accepted = true;
-    reason = 'Readable text detected (no confidence data).';
-  } else {
-    reason = 'No readable text found (insufficient confident words: ' + wordCount + ' word(s), confidence ' + (meanConfidence === null ? 'unknown' : meanConfidence.toFixed(0) + '%') + ').';
-  }
-  return { accepted, text: accepted ? text : '', words, meanConfidence, reason };
+export interface OcrBridgeResult {
+  ok: boolean;
+  text: string;
+  confidence?: number;
+  words?: OcrWord[];
+  message?: string;
 }
 
 // Variable specifier on purpose: keeps the optional dependency out of the
@@ -123,11 +71,93 @@ export async function isOcrAvailable(): Promise<boolean> {
   return availability;
 }
 
+function isNodeEnvironment(): boolean {
+  return typeof process !== 'undefined' && Boolean(process.versions?.node);
+}
+
+function desktopBridge(): { run(bytes: Uint8Array): Promise<OcrBridgeResult> } | null {
+  if (typeof window === 'undefined') return null;
+  const bridge = (window as unknown as { inspectThisDesktop?: { ocr?: { run(bytes: Uint8Array): Promise<OcrBridgeResult> } } }).inspectThisDesktop?.ocr;
+  return bridge ?? null;
+}
+
+/**
+ * Browser asset base for OCR (Vite copies public/ocr into the build root).
+ * Falls back to a relative path so it also works when BASE_URL is unavailable.
+ */
+function browserOcrBase(): string {
+  const env = (import.meta as unknown as { env?: { BASE_URL?: string } }).env;
+  const base = env?.BASE_URL || './';
+  return `${base}ocr/`;
+}
+
+/** Node-only language path: the repo's public/ocr directory (tests). */
+function nodeOcrLangPath(): string {
+  return `${process.cwd().replace(/\\/g, '/')}/public/ocr`;
+}
+
+/**
+ * Decide whether OCR output is genuinely readable text rather than the
+ * phantom/gibberish Tesseract sometimes produces on noise, photos, and
+ * graphics. The filter is deliberately permissive on real words: Tesseract
+ * confidence is unreliable (a correct read can score ~45%), so confidence only
+ * rejects very low scores and single-word results.
+ */
+export function validateOcrText(raw: string, overallConfidence?: number, wordData?: OcrWord[]): OcrValidation {
+  const tokens = raw.split(/\s+/).map((token) => token.trim()).filter(Boolean);
+  const words: string[] = [];
+  const confidences: number[] = [];
+  for (const token of tokens) {
+    const cleaned = token.replace(/[^\p{L}\p{N}.'\u2019-]/gu, '');
+    if (!cleaned) continue;
+    const hasLetter = /\p{L}/u.test(cleaned);
+    const isNumeric = /^\d[\d.,]*$/.test(cleaned);
+    if (!hasLetter && !isNumeric) continue;
+    // Drop isolated single characters: phantom output is often "a b c d".
+    if (cleaned.length === 1) continue;
+    words.push(cleaned);
+    if (wordData?.length) {
+      const match = wordData.find((word) => (word.text ?? '').trim().toLowerCase() === token.toLowerCase());
+      if (match && typeof match.confidence === 'number') {
+        confidences.push(match.confidence);
+      }
+    }
+  }
+  let meanConfidence: number | null = null;
+  if (confidences.length) {
+    meanConfidence = confidences.reduce((sum, value) => sum + value, 0) / confidences.length;
+  } else if (overallConfidence !== undefined) {
+    meanConfidence = overallConfidence;
+  }
+  const text = words.join(' ');
+  const wordCount = words.length;
+  let accepted = false;
+  let reason = '';
+  if (wordCount === 0) {
+    reason = 'No readable text found (no meaningful words).';
+  } else if (meanConfidence !== null && meanConfidence < 30) {
+    reason = 'No readable text found (OCR confidence too low: ' + meanConfidence.toFixed(0) + '%).';
+  } else if (wordCount >= 2) {
+    accepted = meanConfidence === null || meanConfidence >= 40;
+    reason = accepted
+      ? 'Readable text detected.'
+      : 'No readable text found (insufficient confidence: ' + meanConfidence?.toFixed(0) + '%).';
+  } else if (wordCount === 1) {
+    accepted = meanConfidence === null || meanConfidence >= 60;
+    reason = accepted
+      ? 'Readable text detected.'
+      : 'No readable text found (only one low-confidence word: ' + meanConfidence?.toFixed(0) + '%).';
+  } else {
+    reason = 'No readable text found.';
+  }
+  return { accepted, text: accepted ? text : '', words, meanConfidence, reason };
+}
+
 /**
  * Best-effort OCR preprocessing: upscale small images and convert to
- * grayscale when a canvas is available (browser/Electron). Tesseract is
- * dramatically more accurate on larger, high-contrast input. In Node tests
- * (no canvas) the original bytes are returned unchanged.
+ * grayscale when a canvas is available (browser/Electron renderer). Tesseract
+ * is more accurate on larger, high-contrast input. In Node tests (no canvas)
+ * the original bytes are returned unchanged.
  */
 async function preprocessForOcr(bytes: Uint8Array): Promise<Blob> {
   try {
@@ -175,11 +205,56 @@ async function preprocessForOcr(bytes: Uint8Array): Promise<Blob> {
   }
 }
 
+/** Validate raw OCR output into a final OcrOutcome. */
+function outcomeFromRaw(rawText: string, rawConfidence: number | undefined, wordData: OcrWord[] | undefined, provider: string): OcrOutcome {
+  const validation = validateOcrText(rawText, rawConfidence, wordData);
+  if (validation.accepted) {
+    return {
+      available: true,
+      provider,
+      text: validation.text,
+      confidence: validation.meanConfidence ?? rawConfidence,
+      pages: validation.text ? [{ page: 1, text: validation.text, confidence: validation.meanConfidence ?? rawConfidence }] : undefined
+    };
+  }
+  return {
+    available: true,
+    provider,
+    text: '',
+    confidence: validation.meanConfidence ?? rawConfidence,
+    message: validation.reason
+  };
+}
+
 /**
- * Run OCR on an image (PNG/JPEG bytes). Uses tesseract.js when installed.
- * Returns an unavailable outcome (never fake text) when the engine is missing.
+ * Run OCR on an image (PNG/JPEG bytes). Uses tesseract.js when installed,
+ * routed through the Electron main process on desktop and a local web worker
+ * in the browser. Never contacts a CDN. Returns an unavailable outcome (never
+ * fake text) when the engine or its assets are missing.
  */
 export async function ocrImage(bytes: Uint8Array): Promise<OcrOutcome> {
+  const bridge = desktopBridge();
+  if (bridge) {
+    try {
+      const result = await bridge.run(bytes);
+      if (result.ok) {
+        return outcomeFromRaw(result.text ?? '', result.confidence, result.words, 'tesseract.js (desktop)');
+      }
+      return {
+        available: false,
+        provider: 'tesseract.js (desktop)',
+        text: '',
+        message: result.message || 'OCR failed in the desktop engine.'
+      };
+    } catch (error) {
+      return {
+        available: false,
+        provider: 'tesseract.js (desktop)',
+        text: '',
+        message: error instanceof Error ? `OCR failed: ${error.message}` : 'OCR failed'
+      };
+    }
+  }
   if (!(await isOcrAvailable())) {
     return {
       available: false,
@@ -190,31 +265,32 @@ export async function ocrImage(bytes: Uint8Array): Promise<OcrOutcome> {
   }
   try {
     const Tesseract = await import(/* @vite-ignore */ TESSERACT_MODULE);
-    const worker = await Tesseract.createWorker('eng');
+    const options: Record<string, unknown> = {};
+    // tesseract.js throws from its message handler when a job rejects and no
+    // errorHandler is provided; that would crash the process on an unreadable
+    // image. Supplying a handler keeps the failure inside the recognize()
+    // promise, which we catch below.
+    options.errorHandler = () => undefined;
+    if (isNodeEnvironment()) {
+      options.langPath = nodeOcrLangPath();
+      // Keep tesseract's language cache out of the repo root (defaults to ./).
+      options.cachePath = `${process.cwd().replace(/\\/g, '/')}/node_modules/.cache/ocr`;
+    } else {
+      const base = browserOcrBase();
+      options.workerPath = `${base}worker.min.js`;
+      options.corePath = `${base}core/`;
+      options.langPath = base;
+    }
+    const worker = await Tesseract.createWorker('eng', 1, options);
     try {
-      const blob = await preprocessForOcr(bytes);
-      const result = await worker.recognize(blob);
+      // Node reads a Buffer; the browser reads a (possibly preprocessed) Blob.
+      const input = isNodeEnvironment() ? Buffer.from(bytes) : await preprocessForOcr(bytes);
+      const result = await worker.recognize(input);
       await worker.terminate();
       const rawText = (result?.data?.text as string | undefined) ?? '';
       const rawConfidence = typeof result?.data?.confidence === 'number' ? result.data.confidence : undefined;
       const wordData = Array.isArray(result?.data?.words) ? result.data.words as OcrWord[] : undefined;
-      const validation = validateOcrText(rawText, rawConfidence, wordData);
-      if (validation.accepted) {
-        return {
-          available: true,
-          provider: 'tesseract.js',
-          text: validation.text,
-          confidence: validation.meanConfidence ?? rawConfidence,
-          pages: validation.text ? [{ page: 1, text: validation.text, confidence: validation.meanConfidence ?? rawConfidence }] : undefined
-        };
-      }
-      return {
-        available: true,
-        provider: 'tesseract.js',
-        text: '',
-        confidence: validation.meanConfidence ?? rawConfidence,
-        message: validation.reason
-      };
+      return outcomeFromRaw(rawText, rawConfidence, wordData, 'tesseract.js');
     } catch (error) {
       await worker.terminate().catch(() => undefined);
       throw error;
@@ -276,5 +352,3 @@ export function ocrWorthwhile(input: {
   }
   return { worthwhile: false, reason: 'extractable text is already present' };
 }
-
-

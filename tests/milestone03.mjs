@@ -151,13 +151,12 @@ export async function runMilestoneThreeTests() {
     assert.equal(pairs.length, 1, 'one near-duplicate pair');
   }
 
-  // --- OCR architecture (graceful, local, no fake output) ---
+  // --- OCR architecture (local engine present, never fakes output) ---
   {
-    const available = await isOcrAvailable();
+    assert.equal(await isOcrAvailable(), true, 'local OCR engine is installed');
     const outcome = await ocrImage(new Uint8Array([1, 2, 3]));
-    assert.equal(outcome.available, false, 'OCR unavailable without tesseract.js');
-    assert.equal(outcome.text, '', 'no fake OCR text');
-    assert.ok(outcome.message && outcome.message.length > 0, 'explains unavailability');
+    assert.equal(outcome.text, '', 'no fake OCR text for unreadable input');
+    assert.ok(outcome.message && outcome.message.length > 0, 'explains why no text');
     assert.equal(ocrWorthwhile({ pageCount: 3, textSnippetCount: 0, imageCount: 2 }).worthwhile, true, 'image-only pages warrant OCR');
     assert.equal(ocrWorthwhile({ pageCount: 3, textSnippetCount: 40 }).worthwhile, false, 'text-rich pages do not warrant OCR');
     assert.equal(ocrWorthwhile({ isScreenshot: true }).worthwhile, true, 'screenshots warrant OCR');

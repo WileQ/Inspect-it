@@ -24,3 +24,8 @@ desktop.ini
 # Editor
 .vscode/
 .idea/
+
+# Generated OCR assets (see scripts/setup-ocr.mjs)
+/public/ocr/worker.min.js
+/public/ocr/core/
+

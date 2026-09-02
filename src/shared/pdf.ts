@@ -157,8 +157,11 @@ async function extractWithPdfjs(
   options: { signal: AbortSignal; maxPages: number }
 ): Promise<PdfExtraction> {
   const { api, cMapUrl, standardFontDataUrl } = loaded;
+  // pdf.js transfers (detaches) the data buffer to its worker; pass a copy so
+  // the caller's bytes remain usable afterwards (e.g. for JPEG extraction).
+  const dataCopy = bytes.slice();
   const loadingTask = api.getDocument({
-    data: bytes,
+    data: dataCopy,
     cMapUrl,
     standardFontDataUrl,
     useSystemFonts: true,
@@ -348,6 +351,47 @@ export function pdfPageCount(source: string): number {
     }
   }
   return (source.match(/\/Type\s*\/Page\b/g) ?? []).length;
+}
+
+/**
+ * Extract embedded JPEG (DCTDecode) image streams from raw PDF bytes. Scanned
+ * PDFs usually contain one JPEG per page; these can be OCR'd directly without
+ * rendering. Bounded by image count and scan window. Returns JPEG byte blobs
+ * (starting with the FFD8 SOI marker).
+ */
+export function extractPdfJpegs(bytes: Uint8Array, maxImages = 12, maxBytesPerImage = 8 * 1024 * 1024): Uint8Array[] {
+  const text = new TextDecoder('latin1', { fatal: false }).decode(bytes.slice(0, FALLBACK_SCAN_BYTES));
+  const out: Uint8Array[] = [];
+  const imageRe = /\/Subtype\s*\/Image\b/g;
+  let match: RegExpExecArray | null;
+  while ((match = imageRe.exec(text)) !== null && out.length < maxImages) {
+    // The image dictionary sits between the /Subtype /Image keyword and the
+    // stream keyword. It must declare a DCTDecode filter (a JPEG image).
+    const startIndex = match.index;
+    const streamPos = text.indexOf('stream', startIndex);
+    if (streamPos === -1 || streamPos - startIndex > 8000) continue;
+    const dict = text.slice(startIndex, streamPos);
+    if (!/\/Filter\s*(\/DCTDecode|\[[^\]]*\/DCTDecode)/.test(dict)) continue;
+    // Skip the EOL that normally follows the stream keyword.
+    let bodyStart = streamPos + 'stream'.length;
+    if (text.startsWith('\r\n', bodyStart)) bodyStart += 2;
+    else if (text.startsWith('\n', bodyStart)) bodyStart += 1;
+    const endIndex = text.indexOf('endstream', bodyStart);
+    if (endIndex === -1) continue;
+    const raw = text.slice(bodyStart, endIndex);
+    if (!raw.length) continue;
+    const rawBytes = new Uint8Array(raw.length);
+    for (let index = 0; index < raw.length; index += 1) {
+      rawBytes[index] = raw.charCodeAt(index) & 0xff;
+    }
+    let end = rawBytes.length;
+    while (end > 0 && (rawBytes[end - 1] === 0x0a || rawBytes[end - 1] === 0x0d)) end -= 1;
+    const jpeg = rawBytes.slice(0, end);
+    if (jpeg.length > 0 && jpeg.length <= maxBytesPerImage && jpeg[0] === 0xff && jpeg[1] === 0xd8) {
+      out.push(jpeg);
+    }
+  }
+  return out;
 }
 
 /** Regex fallback: returns a best-effort extraction when pdfjs is unusable. */

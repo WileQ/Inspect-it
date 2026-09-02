@@ -1,12 +1,12 @@
 import JSZip from 'jszip';
-import { isOcrAvailable } from './ocr.ts';
-import { extractPdfMetadataFromRaw, extractPdfStreamText, extractPdfText, pdfPageCount } from './pdf.ts';
+import { isOcrAvailable, ocrImage } from './ocr.ts';
+import { extractPdfJpegs, extractPdfMetadataFromRaw, extractPdfStreamText, extractPdfText, pdfPageCount } from './pdf.ts';
 import { analyzeEmailFile } from './email.ts';
 import { analyzeEpubFile } from './ebook.ts';
 import type { AnalysisResult, AnalysisSection, Evidence, Finding, InspectionFile } from './types.ts';
 import { digestHex, formatNumber, percent, shortFingerprint } from './utils.ts';
 import { evidence, finding, parseXml, readBytes } from './analysis-utils.ts';
-import { ensureNotAborted, limitArray, extension, mean, median, safeNumber, stddev } from './analysis-utils.ts';
+import { ensureNotAborted, limitArray, extension, mean, median, safeNumber, stddev, tokenizeWords } from './analysis-utils.ts';
 
 function identity(file: InspectionFile, format: string, fingerprint: string) {
   return {
@@ -181,6 +181,20 @@ export async function analyzePdfFile(file: InspectionFile, options: { signal: Ab
     evidenceList.push(evidence('pdf-embedded-count', 'Embedded file attachments', formatNumber(embeddedFiles)));
   }
   const ocrAvailable = await isOcrAvailable();
+  // Local OCR for image-only ("scanned") PDFs: extract embedded JPEG page
+  // images and run the same OCR pipeline used for images. Bounded to the first
+  // 12 page images and 60 pages so a huge scan cannot stall the inspection.
+  const ocrPages: Array<{ page: number; text: string; confidence?: number }> = [];
+  if (scannedLikely && ocrAvailable && pageCount > 0 && pageCount <= 60) {
+    const jpegs = extractPdfJpegs(bytes, 12);
+    for (let index = 0; index < jpegs.length; index += 1) {
+      ensureNotAborted(options.signal);
+      const outcome = await ocrImage(jpegs[index]);
+      if (outcome.available && outcome.text.trim()) {
+        ocrPages.push({ page: index + 1, text: outcome.text.trim(), confidence: outcome.confidence });
+      }
+    }
+  }
   const textDensity = pageCount ? wordCount / pageCount : 0;
   const emptyPageRatio = pageCount ? blankPages / pageCount : 0;
   const repeatedCounts = new Map<string, number>();
@@ -308,6 +322,31 @@ export async function analyzePdfFile(file: InspectionFile, options: { signal: Ab
       methodology: 'anomaly',
       confidence: 'high',
       category: 'metadata'
+    });
+  }
+  if (ocrPages.length) {
+    const combinedOcr = ocrPages.map((entry) => entry.text).join(' ');
+    evidenceList.push(evidence('pdf-ocr-text', 'OCR text', combinedOcr.slice(0, 300)));
+    sections.push({
+      id: 'pdf-ocr',
+      title: 'OCR (scanned pages)',
+      items: ocrPages.slice(0, 8).map((entry, index) =>
+        evidence(
+          `pdf-ocr-page-${index}`,
+          `Page ${entry.page}`,
+          `${entry.text.slice(0, 300)}${entry.confidence !== undefined ? ` (${entry.confidence.toFixed(0)}% confidence)` : ''}`
+        )
+      )
+    });
+    unusual.push({
+      id: 'pdf-ocr-text-recovered',
+      title: 'Scanned text recovered via OCR',
+      summary: `OCR recovered text from ${formatNumber(ocrPages.length)} page image(s) locally (${formatNumber(tokenizeWords(combinedOcr).length)} words).`,
+      severity: 'info',
+      evidence: ['pdf-ocr-text', 'pdf-images'],
+      methodology: 'ml',
+      confidence: 'medium',
+      category: 'structure'
     });
   }
   const recommendations: Finding[] = [];

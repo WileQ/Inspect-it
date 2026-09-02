@@ -46,6 +46,13 @@ export async function runProductionTests() {
     for (const script of ['dev', 'build', 'test', 'package', 'dist', 'dist:win', 'dist:mac', 'dist:linux']) {
       assert.equal(typeof pkg.scripts[script], 'string', `script ${script} present`);
     }
+    // Build commands must never implicitly publish; the release job owns publishing.
+    for (const script of ['package', 'dist', 'dist:win', 'dist:mac', 'dist:linux', 'package:mac', 'package:linux']) {
+      assert.ok(pkg.scripts[script].includes('--publish never'), `script ${script} uses --publish never`);
+    }
+    // Linux desktop entry name + sync (electron-builder window association).
+    assert.equal(pkg.desktopName, 'inspect-this.desktop', 'package.json desktopName set');
+    assert.equal(pkg.build.linux.syncDesktopName, true, 'linux.syncDesktopName enabled');
     const linuxTargets = String(pkg.build.linux.target).toLowerCase();
     assert.ok(linuxTargets.includes('appimage'), 'linux AppImage target configured');
     assert.ok(linuxTargets.includes('deb'), 'linux deb target configured');
@@ -64,14 +71,29 @@ export async function runProductionTests() {
     assert.ok(exists('electron/autostart.cjs'), 'Linux autostart module exists');
     assert.ok(exists('.github/workflows/build.yml'), 'CI workflow exists for cross-platform builds');
     assert.ok(exists('docs/RELEASING.md'), 'release documentation exists');
+    assert.ok(exists('scripts/check-release-version.mjs'), 'tag/version guard script exists');
+    const guard = read('scripts/check-release-version.mjs');
+    assert.ok(guard.includes('package.json version') || guard.includes('pkg.version'), 'version guard compares tag to package.json');
     const workflow = read('.github/workflows/build.yml');
     assert.ok(workflow.includes('windows-latest') && workflow.includes('macos-latest') && workflow.includes('ubuntu-latest'), 'CI matrix covers Windows, macOS, and Linux');
-    assert.ok(workflow.includes("run: npm run dist:win"), 'CI builds the Windows installer');
-    assert.ok(workflow.includes("run: npm run dist:mac") || workflow.includes('dist:mac'), 'CI builds the macOS app');
-    assert.ok(workflow.includes("run: npm run dist:linux"), 'CI builds the Linux packages');
+    assert.ok(workflow.includes('npm run dist:win'), 'CI builds the Windows installer');
+    assert.ok(workflow.includes('npm run dist:mac'), 'CI builds the macOS app');
+    assert.ok(workflow.includes('npm run dist:linux'), 'CI builds the Linux packages');
     assert.ok(workflow.includes('refs/tags/v'), 'CI releases on version tags');
+    assert.ok(workflow.includes('check-release-version.mjs'), 'CI verifies tag matches package.json');
     assert.ok(workflow.includes('softprops/action-gh-release'), 'CI publishes a GitHub Release');
-    assert.ok(workflow.includes('APPLE_APP_SPECIFIC_PASSWORD') && workflow.includes('APPLE_TEAM_ID'), 'CI wires Apple notarization credentials');
+    // Publish separation: GH_TOKEN only on the release job; build jobs never publish.
+    assert.ok(workflow.includes('GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}'), 'release job uses the GitHub token');
+    const tokenLines = workflow.split(/\r?\n/).filter((line) => line.includes('GITHUB_TOKEN'));
+    assert.equal(tokenLines.length, 1, 'only the release job holds the GitHub token');
+    assert.ok(!workflow.includes('--publish always') && !workflow.includes('-p always'), 'no build command force-publishes');
+    // Signing env is guarded (mapped *_VALUE envs exported only when non-empty),
+    // so an absent secret cannot become an empty CSC_LINK that breaks macOS.
+    assert.ok(workflow.includes('CSC_LINK_VALUE'), 'signing cert passed via guarded env');
+    assert.ok(workflow.includes('CSC_KEY_PASSWORD_VALUE'), 'signing password passed via guarded env');
+    assert.ok(workflow.includes('APPLE_APP_SPECIFIC_PASSWORD_VALUE') && workflow.includes('APPLE_TEAM_ID_VALUE'), 'Apple notarization credentials passed via guarded env');
+    assert.ok(!workflow.includes('CSC_LINK: ${{ secrets.CSC_LINK }}'), 'CSC_LINK is not set unconditionally');
+    assert.ok(workflow.includes("if [ -n \"$CSC_LINK_VALUE\" ]"), 'signing env exported only when the secret is present');
     const releasing = read('docs/RELEASING.md');
     assert.ok(releasing.includes('Developer ID Application'), 'release docs cover the Apple certificate');
     assert.ok(releasing.includes('CSC_LINK'), 'release docs cover CI signing secrets');
@@ -85,6 +107,22 @@ export async function runProductionTests() {
     assert.ok(pkg.homepage, 'package.json homepage is set');
     assert.equal(pkg.build.mac.hardenedRuntime, true, 'macOS hardened runtime enabled');
     assert.equal(pkg.build.mac.gatekeeperAssess, false, 'macOS gatekeeper assessment disabled (notarize handles it)');
+  }
+
+  // --- Local OCR packaging ---------------------------------------------------
+  {
+    const pkg = JSON.parse(read('package.json'));
+    assert.ok(pkg.dependencies['tesseract.js'], 'tesseract.js is a runtime dependency');
+    assert.ok(pkg.dependencies['tesseract.js-core'], 'tesseract.js-core is a runtime dependency');
+    assert.equal(typeof pkg.scripts['setup:ocr'], 'string', 'setup:ocr script exists');
+    const files = JSON.stringify(pkg.build.files);
+    assert.ok(files.includes('node_modules/tesseract.js'), 'packaged app ships tesseract.js');
+    assert.ok(files.includes('node_modules/tesseract.js-core'), 'packaged app ships tesseract.js-core');
+    assert.ok(exists('public/ocr/eng.traineddata.gz'), 'English OCR language data is vendored');
+    assert.ok(exists('scripts/setup-ocr.mjs'), 'OCR asset setup script exists');
+    const ocrSource = read('src/shared/ocr.ts');
+    assert.ok(ocrSource.includes('langPath'), 'OCR uses a local language path');
+    assert.ok(!ocrSource.includes('jsdelivr') && !ocrSource.includes('tessdata.projectnaptha'), 'OCR never fetches language data from a CDN');
   }
 
   // --- Content Security Policy ----------------------------------------------

@@ -4,6 +4,8 @@
 import JSZip from 'jszip';
 import { gzipSync, zlibSync } from 'fflate';
 import initSqlJs from 'sql.js/dist/sql-asm.js';
+import { encode as encodeJpeg } from 'jpeg-js';
+import { renderTextPng, renderTextRgba } from './ocr-font.mjs';
 
 export function toItem(name, bytes, mimeType = 'application/octet-stream') {
   const file = new File([bytes], name, { type: mimeType, lastModified: 1_700_000_000_000 });
@@ -251,6 +253,46 @@ export function makeExifJpegItem(name = 'photo.jpg') {
   out.push(0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x01, 0x00, 0x01, 0x03, 0x01, 0x11, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00);
   out.push(0xff, 0xd9);
   return toItem(name, Uint8Array.from(out), 'image/jpeg');
+}
+
+export function makeOcrTextItem(name = 'ocr-text.png', text = 'HELLO WORLD', scale = 10) {
+  const { bytes } = renderTextPng(text, { scale, pad: 24 });
+  return toItem(name, bytes, 'image/png');
+}
+
+export function makeScannedPdfItem() {
+  const enc = new TextEncoder();
+  // A text bitmap rendered as a JPEG inside a single-page PDF (DCTDecode), so
+  // the scanned-PDF OCR path has a real image to extract and recognize.
+  const { data, width, height } = renderTextRgba('HELLO WORLD', { scale: 10, pad: 24 });
+  const jpeg = Buffer.from(encodeJpeg({ data: Buffer.from(data), width, height }, 92).data);
+  const mediaWidth = width;
+  const mediaHeight = height;
+  const toLatin1 = (value) => [...value].map((char) => String.fromCharCode(char & 0xff)).join('');
+  const imageStream = `<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.length} >>\nstream\n`;
+  const content = `q ${width} 0 0 ${height} 0 0 cm /Im1 Do Q`;
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${mediaWidth} ${mediaHeight}] /Resources << /XObject << /Im1 4 0 R >> >> /Contents 5 0 R >>`,
+    imageStream + toLatin1(Buffer.from(jpeg)) + '\nendstream',
+    `<< /Length ${content.length} >>\nstream\n${content}\nendstream`
+  ];
+  const parts = [latin1Bytes('%PDF-1.4\n')];
+  const offsets = [0];
+  objects.forEach((obj, index) => {
+    offsets.push(parts.reduce((acc, part) => acc + part.length, 0));
+    parts.push(latin1Bytes(`${index + 1} 0 obj\n${obj}\nendobj\n`));
+  });
+  const xrefStart = parts.reduce((acc, part) => acc + part.length, 0);
+  let xref = `xref\n0 ${objects.length + 1}\n`;
+  xref += '0000000000 65535 f \n';
+  for (let index = 1; index <= objects.length; index += 1) {
+    xref += offsets[index].toString().padStart(10, '0') + ' 00000 n \n';
+  }
+  xref += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
+  parts.push(latin1Bytes(xref));
+  return toItem('scanned.pdf', concatBytes(parts), 'application/pdf');
 }
 
 export function makeInvalidPdfItem() {

@@ -37,6 +37,7 @@ No browser, no localhost, no terminal ? the bubble is always there, click it to 
 - **Floating bubble** ? circular, warm orange, draggable, remembers its position, accepts drag-and-drop, and stays above other windows. Click it to open the compact popup beside it; drag the popup's header to move it, or its corner handle to resize it.
 - **Universal analyzer** ? documents, archives, code, data, media, websites, folders, and generic files (full format list below).
 - **Evidence-first findings** ? every non-trivial claim is traceable to a measurement (`FACT`), a statistical deviation (`ANOMALY`), a rule (`HEURISTIC`), or a model (`ML`). Nothing is presented as fact without evidence.
+- **Local OCR** ? on-device text recognition for images and scanned PDFs (tesseract.js + English language data bundled; no cloud, no network).
 - **Deep local analysis** ? statistical anomaly detection, exact + near-duplicate detection, perceptual image similarity, code complexity, dependency graphs, cross-object relationships, and visualizations.
 - **Optional AI interpretation** ? works with any OpenAI-compatible provider (OpenAI, Ollama, LM Studio, custom endpoints). Off by default.
 - **History & cache** ? past analyses are stored locally; unchanged objects are not re-analyzed.
@@ -89,7 +90,7 @@ The analyzer engine lives in `src/shared/` and is shared between the desktop app
 
 ## Privacy
 
-- **Without AI:** everything stays on your device. No network calls, no telemetry, no tracking.
+- **Without AI:** everything stays on your device (analysis, OCR, hashing ? all local). No network calls, no telemetry, no tracking.
 - **With AI:** a bounded structured summary is sent to the provider you explicitly configured. Raw files are never uploaded automatically.
 - **Desktop key storage:** API keys are encrypted with your OS keychain via Electron `safeStorage` and are only used inside the main process. They are never logged, cached, or included in results.
 - **Browser key storage:** local storage (not encrypted) ? a documented limitation; use the desktop app for sensitive keys.
@@ -161,14 +162,19 @@ npm run icons        # regenerate app/tray icons (scripts/generate-icons.mjs)
 > (code signing/notarization needs a Mac and Apple credentials), Linux packages
 > are produced on Linux, and Windows packages on Windows. The CI workflow
 > (`.github/workflows/build.yml`) builds and tests all three on every push, and
-> publishing a GitHub Release with all installers is just a tag away:
+> publishing a GitHub Release with all installers is a tag away:
 >
 > ```bash
-> git tag v1.0.0 && git push origin v1.0.0
+> npm version 1.0.1 --no-git-tag-version   # bump package.json first
+> git commit -am "release: 1.0.1"
+> git tag v1.0.1 && git push origin main --tags
 > ```
 >
-> See [docs/RELEASING.md](docs/RELEASING.md) for the full version/tag flow and
-> the macOS signing/notarization setup.
+> `package.json` is the single source of truth for the version; CI fails if the
+> tag and package.json disagree (see `scripts/check-release-version.mjs`).
+> Builds never publish implicitly - only the dedicated release job creates the
+> GitHub Release. See [docs/RELEASING.md](docs/RELEASING.md) for the full
+> version/tag flow and the macOS signing/notarization setup.
 
 
 **Production builds are self-contained**: the renderer is bundled into the Electron app (`dist/`), so the packaged application does not need Vite, localhost, Node, or npm at runtime.

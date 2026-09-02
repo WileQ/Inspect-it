@@ -408,6 +408,7 @@ app.whenReady().then(() => {
   createWindow();
   createTray();
   registerAiIpc();
+  registerOcrIpc();
 
   ipcMain.handle('inspect-this:get-window-state', () => ({
     expanded,
@@ -746,6 +747,44 @@ async function performAiChat(sender, requestId, payload) {
     clearTimeout(timeout);
     activeAiRequests.delete(requestId);
   }
+}
+
+/* ---------------------------------------------------------------------------
+ * Local OCR (tesseract.js) run in the main process (Node). Running OCR here
+ * avoids file:// fetch restrictions in the packaged renderer: the worker,
+ * WASM, and language data are read from disk / node_modules. Language data is
+ * shipped at dist/ocr (copied from public/ocr by Vite); in development the
+ * source public/ocr is used.
+ * ------------------------------------------------------------------------- */
+
+const ocrLangPath = () => {
+  const distPath = path.join(__dirname, '..', 'dist', 'ocr');
+  const publicPath = path.join(__dirname, '..', 'public', 'ocr');
+  return fs.existsSync(distPath) ? distPath : publicPath;
+};
+
+async function runOcr(bytes) {
+  try {
+    const Tesseract = require('tesseract.js');
+    const worker = await Tesseract.createWorker('eng', 1, { langPath: ocrLangPath(), cachePath: path.join(app.getPath('userData'), 'ocr-cache'), errorHandler: () => undefined });
+    try {
+      const result = await worker.recognize(Buffer.from(bytes ?? []));
+      return {
+        ok: true,
+        text: result?.data?.text ?? '',
+        confidence: typeof result?.data?.confidence === 'number' ? result.data.confidence : undefined,
+        words: Array.isArray(result?.data?.words) ? result.data.words : undefined
+      };
+    } finally {
+      await worker.terminate().catch(() => undefined);
+    }
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : 'OCR failed' };
+  }
+}
+
+function registerOcrIpc() {
+  ipcMain.handle('inspect-this:ocr', (_event, bytes) => runOcr(bytes));
 }
 
 function registerAiIpc() {

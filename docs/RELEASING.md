@@ -7,16 +7,22 @@ installers to a GitHub Release.
 
 ## Quick summary
 
+`package.json` is the single source of truth for the version (it is baked into
+the app and into artifact names). CI fails loudly if a tag does not match it.
+
 ```bash
-# 1. Make sure package.json `version` matches the tag you will push (e.g. 1.0.1)
-# 2. Commit and push the release changes
+# 1. Bump package.json `version` (e.g. 1.0.1) and commit it
+npm version 1.0.1 --no-git-tag-version   # or edit package.json manually
+git add package.json package-lock.json
+git commit -m "release: 1.0.1"
 git push origin main
 
-# 3. Tag and push the tag
+# 2. Tag exactly v<version> and push the tag
 git tag v1.0.1
 git push origin v1.0.1
 
-# 4. CI builds Windows/macOS/Linux installers and creates the GitHub Release.
+# 3. CI verifies tag == package.json version, builds all installers, and
+#    creates the GitHub Release with them attached.
 ```
 
 Artifacts produced:
@@ -38,20 +44,40 @@ Artifacts produced:
 ## 1. Version flow
 
 - The release version is `package.json` -> `version` (semver, e.g. `1.0.1`).
-- The git tag must be `v` + that version (`v1.0.1`). CI keys the release off
-  `refs/tags/v*`.
+- The git tag must be exactly `v` + that version (`v1.0.1`). CI keys the
+  release off `refs/tags/v*`.
+- CI runs `scripts/check-release-version.mjs` before every tag build and fails
+  if the tag and `package.json` disagree, so artifacts can never drift from the
+  tag again (this fixed the `v1.0.1` tag that previously produced `1.0.0`
+  artifacts).
 - A tag containing a dash (`v1.0.1-rc.1`) is published as a **pre-release**.
-- Bump the version in `package.json`, update `docs/RELEASE-NOTES-1.0.0.md` (or
-  add a new notes file), commit, then tag and push.
+- Bump `version` in `package.json` (and `package-lock.json`) FIRST, commit and
+  push, then tag `v<version>` and push the tag.
 
-## 2. What CI does
+> Always bump `package.json` before tagging. Deriving the version from the tag
+> at build time would leave the in-app version (baked from `package.json`)
+> inconsistent with artifact names; keeping `package.json` authoritative and
+> verifying the tag against it is the cleanest single-source-of-truth model.
+
+## 2. What CI does (build is separate from publish)
 
 The workflow (`.github/workflows/build.yml`) runs on every push/PR and on tags:
 
 - **Every run**: `npm ci` -> `npx tsc --noEmit` -> `npm test` -> builds the
   platform's installer(s) -> uploads them as workflow artifacts.
-- **Tag pushes only**: a `release` job downloads all three platforms'
+- **Tag pushes only**: a dedicated `release` job downloads all three platforms'
   installers and creates a GitHub Release with them attached.
+
+**Build/publish separation:**
+
+- Every build command in `package.json` ends in `--publish never`
+  (`npm run dist:win`, `dist:mac`, `dist:linux`, `dist`, `package`, ...), so
+  electron-builder never implicitly publishes to GitHub - even when it detects
+  a git tag (this removed the "GitHub Personal Access Token is not set" CI
+  failure on Windows and Linux).
+- No `GH_TOKEN` is set on the build jobs. The `release` job is the ONLY job
+  that creates the GitHub Release (via `softprops/action-gh-release`) and the
+  only place a token is used.
 
 You can also download the per-OS installers from the workflow "Artifacts"
 section on any run, without creating a release.
@@ -98,7 +124,7 @@ these repository secrets:
 
 | Secret | Value |
 | --- | --- |
-| `CSC_LINK` | The base64 `.p12` string from step 3.2 |
+| `CSC_LINK` | The certificate input: a base64-encoded `.p12`, a URL, or an absolute file path (from step 3.2) |
 | `CSC_KEY_PASSWORD` | The .p12 password |
 | `APPLE_ID` | The Apple ID used for notarization |
 | `APPLE_APP_SPECIFIC_PASSWORD` | The app-specific password from 3.3 |
@@ -106,7 +132,13 @@ these repository secrets:
 
 ### 3.5 How it works in CI
 
-- The macOS job signs the app whenever `CSC_LINK` is set.
+- The macOS job exports `CSC_LINK`/`CSC_KEY_PASSWORD` into the environment
+  **only when the secrets are non-empty**. A present-but-empty `CSC_LINK`
+  makes electron-builder believe a certificate is configured and fails with
+  `"... not a file"`; leaving it unset produces a clean ad-hoc (unsigned) build.
+- When `CSC_LINK` is set, electron-builder imports it (base64 strings are
+  decoded automatically; URLs are downloaded; paths are read directly) and signs
+  with `CSC_KEY_PASSWORD`.
 - On **release tags only**, if `APPLE_ID` is set, CI also notarizes the app
   (`-c.mac.notarize=true`) and staples the ticket, so the DMG installs without
   Gatekeeper warnings.

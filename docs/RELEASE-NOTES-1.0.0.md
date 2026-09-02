@@ -58,8 +58,9 @@ See `docs/PLATFORMS.md` for details and troubleshooting.
 - Legacy .xls is detected but not structurally inspected (convert to XLSX).
 - Audio/video analysis reads container metadata only (no decode).
 - No vulnerability database is bundled, so no vulnerability claims are made.
-- OCR is local and optional (tesseract.js when installed); otherwise the app
-  honestly reports OCR is unavailable.
+- OCR ships locally (tesseract.js + English language data bundled, no network):
+  images and scanned PDFs get on-device text recognition; other languages can be
+  added later.
 - Code complexity is a brace/indent heuristic, not full AST analysis.
 - AI interpretations can be wrong; local findings remain authoritative.
 

@@ -58,10 +58,10 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     rollupOptions: {
-      // tesseract.js is an optional on-device OCR engine loaded at runtime only
-      // when installed; the app degrades gracefully (reports unavailable) when
-      // it is absent, so it must not be bundled or resolved at build time.
-      external: ['tesseract.js']
+      // tesseract.js is bundled for the browser OCR path (lazy dynamic import)
+      // and resolved from node_modules in Node/tests and the Electron main
+      // process. OCR degrades gracefully if the engine is ever absent.
+      external: []
     }
   },
   server: {

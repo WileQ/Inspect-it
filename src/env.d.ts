@@ -23,6 +23,15 @@ declare global {
       getAutoLaunch: () => Promise<boolean>;
       setAutoLaunch: (enabled: boolean) => Promise<boolean>;
       onModeChange: (handler: (mode: 'bubble' | 'panel') => void) => () => void;
+      ocr?: {
+        run: (bytes: Uint8Array) => Promise<{
+          ok: boolean;
+          text: string;
+          confidence?: number;
+          words?: Array<{ text?: string; confidence?: number }>;
+          message?: string;
+        }>;
+      };
       ai?: {
         chat: (payload: {
           requestId: string;
