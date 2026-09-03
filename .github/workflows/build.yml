@@ -123,6 +123,12 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Each job gets a fresh workspace, so check out the tag before running
+      # repo scripts (e.g. scripts/check-release-version.mjs) or reading
+      # package.json. On a tag push this checks out the tagged commit.
+      - name: Checkout
+        uses: actions/checkout@v4
+
       # Clear, actionable failure instead of a silent skip: this step fails the
       # job (and explains why) whenever any platform build leg did not succeed.
       - name: Require successful platform builds
