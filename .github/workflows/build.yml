@@ -112,11 +112,25 @@ jobs:
   release:
     name: Publish GitHub Release
     needs: build
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    # GitHub Actions auto-skips a `needs:` job when a dependency is skipped or
+    # fails, UNLESS the job uses `always()`. We want the release job to RUN on
+    # every v-tag push so it can clearly report why it cannot publish, instead
+    # of being silently "skipped". The job then requires `needs.build` to have
+    # succeeded before it publishes (see the guard step below). Branch/PR runs
+    # never reach this job (ref_type is 'branch' or the event is pull_request).
+    if: always() && github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      # Clear, actionable failure instead of a silent skip: this step fails the
+      # job (and explains why) whenever any platform build leg did not succeed.
+      - name: Require successful platform builds
+        if: needs.build.result != 'success'
+        run: |
+          echo "::error::Release not published: the platform build job finished with result '${{ needs.build.result }}'. Inspect the build job logs (e.g. npm test / installer build) and re-run after fixing."
+          exit 1
+
       - name: Set up Node (pinned to the supported version)
         uses: actions/setup-node@v4
         with:
@@ -131,6 +145,23 @@ jobs:
           pattern: installers-*
           path: artifacts
           merge-multiple: true
+
+      # Never publish a release with missing installers: list what we got and
+      # fail loudly if any expected platform artifact is absent.
+      - name: Verify installers present
+        run: |
+          echo "Downloaded artifacts:"
+          (find artifacts -type f 2>/dev/null | sort) || ls -R artifacts
+          missing=0
+          for pattern in '*.exe' '*.dmg' '*.zip' '*.AppImage' '*.deb'; do
+            found=$(find artifacts -type f -name "$pattern" 2>/dev/null | wc -l | tr -d ' ')
+            echo "$pattern -> $found file(s)"
+            if [ "$found" -eq 0 ]; then missing=1; fi
+          done
+          if [ "$missing" -eq 1 ]; then
+            echo "::error::Expected platform installers are missing; refusing to create a source-only release."
+            exit 1
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
