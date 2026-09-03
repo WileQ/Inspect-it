@@ -6,7 +6,7 @@ declare global {
   var __APP_REPOSITORY_URL__: string;
 
   interface Window {
-    inspectThisDesktop?: {
+    inspectItDesktop?: {
       getWindowState: () => Promise<{
         expanded: boolean;
         bubbleState: { x?: number; y?: number; width: number; height: number };

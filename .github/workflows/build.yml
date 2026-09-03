@@ -50,7 +50,7 @@ jobs:
         env:
           # OCR diagnostics surface the exact engine state if Milestone 06
           # fails in CI (image format, normalization, lang/core paths, outcome).
-          INSPECT_THIS_OCR_DEBUG: '1'
+          INSPECT_IT_OCR_DEBUG: '1'
 
       # Build commands bake in `--publish never` (see package.json scripts), so
       # electron-builder never implicitly publishes to GitHub from a tag. Each
@@ -173,9 +173,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: artifacts/**/*
-          name: Inspect This ${{ github.ref_name }}
+          name: Inspect It ${{ github.ref_name }}
           body: |
-            ## Inspect This ${{ github.ref_name }}
+            ## Inspect It ${{ github.ref_name }}
 
             Installers for all platforms, attached to this release (version = `${{ github.ref_name }}` without the leading `v`, matching package.json):
 

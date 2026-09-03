@@ -91,8 +91,8 @@ function pngFile(): InspectionFile {
 }
 
 afterEach(() => {
-  storageRemove('inspect-this.history');
-  storageRemove('inspect-this.cache');
+  storageRemove('inspect-it.history');
+  storageRemove('inspect-it.cache');
 });
 
 describe('analysis engine', () => {

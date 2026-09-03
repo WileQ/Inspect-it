@@ -2,7 +2,7 @@
 
 ## Objective
 
-Add an optional AI interpretation layer without turning Inspect This into an AI wrapper.
+Add an optional AI interpretation layer without turning Inspect It into an AI wrapper.
 
 ## Implement
 

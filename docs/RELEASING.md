@@ -1,4 +1,4 @@
-﻿# Releasing Inspect This
+﻿# Releasing Inspect It
 
 This document explains how to produce and publish installers for **Windows,
 macOS, and Linux** to GitHub Releases. The whole pipeline is driven by tags:
@@ -29,9 +29,9 @@ Artifacts produced:
 
 | Platform | Files | Notes |
 | --- | --- | --- |
-| Windows x64 | `Inspect-This-<ver>-Windows-x64.exe` | NSIS installer |
-| macOS x64 + arm64 | `Inspect-This-<ver>-macOS-<arch>.dmg`, `.zip` | Signed + notarized only when Apple credentials are configured |
-| Linux x64 | `Inspect-This-<ver>.AppImage`, `inspect-this_<ver>_amd64.deb` | Not signed (Linux has no standard code-signing requirement) |
+| Windows x64 | `Inspect-It-<ver>-Windows-x64.exe` | NSIS installer |
+| macOS x64 + arm64 | `Inspect-It-<ver>-macOS-<arch>.dmg`, `.zip` | Signed + notarized only when Apple credentials are configured |
+| Linux x64 | `Inspect-It-<ver>.AppImage`, `inspect-it_<ver>_amd64.deb` | Not signed (Linux has no standard code-signing requirement) |
 
 ## 0. Before the first release (one-time setup)
 

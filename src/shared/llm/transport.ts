@@ -42,7 +42,7 @@ export interface LlmChatOptions {
 }
 
 export function isDesktopEnvironment(): boolean {
-  return typeof window !== 'undefined' && Boolean((window as unknown as { inspectThisDesktop?: unknown }).inspectThisDesktop);
+  return typeof window !== 'undefined' && Boolean((window as unknown as { inspectItDesktop?: unknown }).inspectItDesktop);
 }
 
 /* ------------------------------------------------------------------ */
@@ -50,7 +50,7 @@ export function isDesktopEnvironment(): boolean {
 /* ------------------------------------------------------------------ */
 
 async function desktopChat(request: LlmChatRequest, options: LlmChatOptions): Promise<LlmChatResult> {
-  const bridge = (window as unknown as { inspectThisDesktop?: { ai?: DesktopAiBridge } }).inspectThisDesktop?.ai;
+  const bridge = (window as unknown as { inspectItDesktop?: { ai?: DesktopAiBridge } }).inspectItDesktop?.ai;
   if (!bridge) {
     throw new LlmError('configuration', 'Desktop AI bridge is unavailable.');
   }

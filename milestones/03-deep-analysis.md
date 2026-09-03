@@ -2,7 +2,7 @@
 
 ## Objective
 
-Make Inspect This substantially more intelligent without requiring an LLM.
+Make Inspect It substantially more intelligent without requiring an LLM.
 
 ## Implement
 

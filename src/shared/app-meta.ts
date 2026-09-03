@@ -3,7 +3,7 @@
 // single source of truth. Set APP_REPOSITORY_URL to the real repository URL
 // before publishing a release.
 const version = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.0.0-dev';
-const name = typeof __APP_NAME__ !== 'undefined' ? __APP_NAME__ : 'Inspect This';
+const name = typeof __APP_NAME__ !== 'undefined' ? __APP_NAME__ : 'Inspect It';
 
 export const APP_NAME = name;
 export const APP_VERSION = version;

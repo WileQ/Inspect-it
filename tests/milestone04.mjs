@@ -73,8 +73,8 @@ function findEvidence(result, id) {
 
 export async function runMilestoneFourTests() {
   clearAiCache();
-  storageRemove('inspect-this.ai-key');
-  storageRemove('inspect-this.ai-settings');
+  storageRemove('inspect-it.ai-key');
+  storageRemove('inspect-it.ai-settings');
 
   // --- Configuration -------------------------------------------------------
   {
@@ -88,7 +88,7 @@ export async function runMilestoneFourTests() {
     assert.equal(loaded.enabled, true, 'settings round-trip enabled');
     assert.equal(loaded.model, 'llama3.1', 'settings round-trip model');
     assert.equal(loaded.stream, false, 'settings round-trip stream');
-    storageRemove('inspect-this.ai-settings');
+    storageRemove('inspect-it.ai-settings');
   }
 
   // --- Request formatting / response parsing (pure functions) --------------
@@ -578,7 +578,7 @@ export async function runMilestoneFourTests() {
   }
 
   clearAiCache();
-  storageRemove('inspect-this.ai-key');
-  storageRemove('inspect-this.ai-settings');
+  storageRemove('inspect-it.ai-key');
+  storageRemove('inspect-it.ai-settings');
   console.log('Milestone 04 LLM-layer tests passed.');
 }

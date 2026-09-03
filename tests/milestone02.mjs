@@ -64,7 +64,7 @@ export async function runMilestoneTwoTests() {
     assert.ok(Number(hasEvidence(result, 'Characters') ? result.evidence.find((e) => e.label === 'Characters').value : 0) > 0, 'PDF character count present');
     assert.ok(Number(hasEvidence(result, 'Text snippets') ? result.evidence.find((e) => e.label === 'Text snippets').value : 0) > 0, 'PDF text extracted from streams');
     assert.equal(hasEvidence(result, 'Title', 'Sample Report'), true, 'PDF metadata title');
-    assert.equal(hasEvidence(result, 'Author', 'Inspect This'), true, 'PDF metadata author');
+    assert.equal(hasEvidence(result, 'Author', 'Inspect It'), true, 'PDF metadata author');
     assert.equal(sectionHas(result, 'pdf-links', (item) => item.value.includes('https://example.com/report')), true, 'PDF links');
     assert.equal(sectionHas(result, 'pdf-text', (item) => item.value.includes('Hello PDF')), true, 'PDF per-page text extracted');
   }

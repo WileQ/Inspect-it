@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const isDev = !!process.env.ELECTRON_START_URL;
-const DEBUG_LOGGING = isDev || !!process.env.INSPECT_THIS_DEBUG;
+const DEBUG_LOGGING = isDev || !!process.env.INSPECT_IT_DEBUG;
 const BUBBLE_WIDTH = 64;
 const BUBBLE_HEIGHT = 64;
 const POPUP_WIDTH = 460;
@@ -17,7 +17,7 @@ const logPath = path.join(logDir, 'main.log');
 
 // Minimal, local, best-effort logger. NEVER log secrets, API keys, file
 // contents, or extracted text. Debug output is only printed when running in
-// development or when INSPECT_THIS_DEBUG is set.
+// development or when INSPECT_IT_DEBUG is set.
 function writeLog(level, message) {
   try {
     fs.mkdirSync(logDir, { recursive: true });
@@ -159,7 +159,7 @@ function readState() {
 
 /**
  * Keep the renderer from navigating anywhere. Analyzed HTML and AI output are
- * untrusted; the Inspect This window must never become a browser. External
+ * untrusted; the Inspect It window must never become a browser. External
  * http/https links are opened in the user's default browser instead.
  */
 function preventNavigation(contents) {
@@ -197,9 +197,9 @@ function createTray() {
       log.warn('Tray icon not found; using empty icon.');
     }
     trayRef = new Tray(image);
-    trayRef.setToolTip('Inspect This');
+    trayRef.setToolTip('Inspect It');
     const menu = Menu.buildFromTemplate([
-      { label: 'Open Inspect This', click: () => openPanel() },
+      { label: 'Open Inspect It', click: () => openPanel() },
       { label: 'Show bubble', click: () => collapseToBubble() },
       { type: 'separator' },
       {
@@ -207,8 +207,8 @@ function createTray() {
         click: () => {
           dialog.showMessageBox({
             type: 'info',
-            title: 'About Inspect This',
-            message: 'Inspect This',
+            title: 'About Inspect It',
+            message: 'Inspect It',
             detail: `${app.getName()} ${app.getVersion()}\n\nDrop anything. Understand it.\nLocal-first, read-only analysis. Optional AI.`,
             buttons: ['OK']
           });
@@ -308,7 +308,7 @@ function createWindow() {
     alwaysOnTop: true,
     skipTaskbar: true,
     show: false,
-    title: 'Inspect This',
+    title: 'Inspect It',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -376,13 +376,13 @@ function setExpanded(nextExpanded) {
     // window moves, then reveal the panel exactly where it belongs.
     windowRef.hide();
     windowRef.setBounds(popup, false);
-    windowRef.webContents.send('inspect-this-mode', 'panel');
+    windowRef.webContents.send('inspect-it-mode', 'panel');
     windowRef.show();
     windowRef.focus();
   } else {
     const bounds = clampBubbleBounds(bubbleState);
     windowRef.hide();
-    windowRef.webContents.send('inspect-this-mode', 'bubble');
+    windowRef.webContents.send('inspect-it-mode', 'bubble');
     windowRef.setResizable(false);
     windowRef.setBounds(bounds, false);
     windowRef.show();
@@ -403,25 +403,25 @@ function focusWindow() {
 app.whenReady().then(() => {
   // Windows-only: associates the app with its taskbar identity (no-op elsewhere).
   if (process.platform === 'win32') {
-    app.setAppUserModelId('com.inspectthis.desktop');
+    app.setAppUserModelId('com.inspectit.desktop');
   }
   createWindow();
   createTray();
   registerAiIpc();
   registerOcrIpc();
 
-  ipcMain.handle('inspect-this:get-window-state', () => ({
+  ipcMain.handle('inspect-it:get-window-state', () => ({
     expanded,
     bubbleState,
     panelSize
   }));
 
-  ipcMain.handle('inspect-this:set-expanded', (_event, nextExpanded) => {
+  ipcMain.handle('inspect-it:set-expanded', (_event, nextExpanded) => {
     setExpanded(Boolean(nextExpanded));
     return { expanded };
   });
 
-  ipcMain.handle('inspect-this:set-bounds', (_event, nextBounds) => {
+  ipcMain.handle('inspect-it:set-bounds', (_event, nextBounds) => {
     if (!windowRef || expanded) {
       return;
     }
@@ -431,16 +431,16 @@ app.whenReady().then(() => {
     windowRef.setBounds(bounds, false);
   });
 
-  ipcMain.handle('inspect-this:focus', () => {
+  ipcMain.handle('inspect-it:focus', () => {
     focusWindow();
   });
 
-  ipcMain.handle('inspect-this:begin-drag', () => {
+  ipcMain.handle('inspect-it:begin-drag', () => {
     dragOrigin = { x: bubbleState.x, y: bubbleState.y };
     return dragOrigin;
   });
 
-  ipcMain.handle('inspect-this:drag-by', (_event, dx, dy) => {
+  ipcMain.handle('inspect-it:drag-by', (_event, dx, dy) => {
     if (!windowRef || expanded || !dragOrigin) {
       return;
     }
@@ -453,7 +453,7 @@ app.whenReady().then(() => {
     windowRef.setBounds(bounds, false);
   });
 
-  ipcMain.handle('inspect-this:panel-resize-by', (_event, dx, dy) => {
+  ipcMain.handle('inspect-it:panel-resize-by', (_event, dx, dy) => {
     if (!windowRef || !expanded) {
       return;
     }
@@ -468,7 +468,7 @@ app.whenReady().then(() => {
     writeState();
   });
 
-  ipcMain.handle('inspect-this:end-drag', () => {
+  ipcMain.handle('inspect-it:end-drag', () => {
     dragOrigin = null;
   });
 
@@ -494,8 +494,8 @@ app.whenReady().then(() => {
     log.warn('Global shortcut could not be registered (another application may own it).');
   }
 
-  ipcMain.handle('inspect-this:get-auto-launch', () => getAutoLaunch());
-  ipcMain.handle('inspect-this:set-auto-launch', (_event, enabled) => setAutoLaunch(Boolean(enabled)));
+  ipcMain.handle('inspect-it:get-auto-launch', () => getAutoLaunch());
+  ipcMain.handle('inspect-it:set-auto-launch', (_event, enabled) => setAutoLaunch(Boolean(enabled)));
 });
 
 app.on('window-all-closed', () => {
@@ -627,7 +627,7 @@ function extractPlainContent(json) {
 async function performAiChat(sender, requestId, payload) {
   const key = readAiKey();
   if (!key) {
-    sender.send('inspect-this:ai-event', {
+    sender.send('inspect-it:ai-event', {
       requestId,
       type: 'error',
       error: { kind: 'invalid-key', message: 'No API key configured.' }
@@ -641,7 +641,7 @@ async function performAiChat(sender, requestId, payload) {
     if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('unsupported protocol');
     endpoint = `${baseUrl}/chat/completions`;
   } catch {
-    sender.send('inspect-this:ai-event', {
+    sender.send('inspect-it:ai-event', {
       requestId,
       type: 'error',
       error: { kind: 'configuration', message: 'The provider base URL is invalid.' }
@@ -650,7 +650,7 @@ async function performAiChat(sender, requestId, payload) {
   }
   const model = String(payload.model || '').trim();
   if (!model) {
-    sender.send('inspect-this:ai-event', {
+    sender.send('inspect-it:ai-event', {
       requestId,
       type: 'error',
       error: { kind: 'configuration', message: 'No model is configured.' }
@@ -692,7 +692,7 @@ async function performAiChat(sender, requestId, payload) {
       } catch {
         // Ignore: provider error bodies are untrusted and optional.
       }
-      sender.send('inspect-this:ai-event', {
+      sender.send('inspect-it:ai-event', {
         requestId,
         type: 'error',
         error: { kind, message: detail ? `${kind}: ${detail}` : kind }
@@ -706,38 +706,38 @@ async function performAiChat(sender, requestId, payload) {
         if (event?.done) break;
         if (event?.content) {
           content += event.content;
-          sender.send('inspect-this:ai-event', { requestId, type: 'delta', text: event.content });
+          sender.send('inspect-it:ai-event', { requestId, type: 'delta', text: event.content });
         }
       }
-      sender.send('inspect-this:ai-event', { requestId, type: 'done', content });
+      sender.send('inspect-it:ai-event', { requestId, type: 'done', content });
       return;
     }
     const json = await response.json().catch(() => null);
     const content = extractPlainContent(json);
     if (!content) {
-      sender.send('inspect-this:ai-event', {
+      sender.send('inspect-it:ai-event', {
         requestId,
         type: 'error',
         error: { kind: 'empty-response', message: 'The provider returned an empty response.' }
       });
       return;
     }
-    sender.send('inspect-this:ai-event', { requestId, type: 'done', content });
+    sender.send('inspect-it:ai-event', { requestId, type: 'done', content });
   } catch (error) {
     if (controller.signal.aborted && error?.message === 'timeout') {
-      sender.send('inspect-this:ai-event', {
+      sender.send('inspect-it:ai-event', {
         requestId,
         type: 'error',
         error: { kind: 'timeout', message: 'The AI request timed out.' }
       });
     } else if (controller.signal.aborted) {
-      sender.send('inspect-this:ai-event', {
+      sender.send('inspect-it:ai-event', {
         requestId,
         type: 'error',
         error: { kind: 'cancelled', message: 'The AI request was cancelled.' }
       });
     } else {
-      sender.send('inspect-this:ai-event', {
+      sender.send('inspect-it:ai-event', {
         requestId,
         type: 'error',
         error: { kind: 'connection', message: 'Could not reach the AI provider.' }
@@ -784,23 +784,23 @@ async function runOcr(bytes) {
 }
 
 function registerOcrIpc() {
-  ipcMain.handle('inspect-this:ocr', (_event, bytes) => runOcr(bytes));
+  ipcMain.handle('inspect-it:ocr', (_event, bytes) => runOcr(bytes));
 }
 
 function registerAiIpc() {
-  ipcMain.handle('inspect-this:ai-get-key', () => readAiKey());
-  ipcMain.handle('inspect-this:ai-set-key', (_event, key) => writeAiKey(typeof key === 'string' ? key : ''));
-  ipcMain.handle('inspect-this:ai-clear-key', () => {
+  ipcMain.handle('inspect-it:ai-get-key', () => readAiKey());
+  ipcMain.handle('inspect-it:ai-set-key', (_event, key) => writeAiKey(typeof key === 'string' ? key : ''));
+  ipcMain.handle('inspect-it:ai-clear-key', () => {
     writeAiKey('');
     return true;
   });
-  ipcMain.handle('inspect-this:ai-has-key', () => Boolean(readAiKey()));
-  ipcMain.handle('inspect-this:ai-chat', (event, payload) => {
+  ipcMain.handle('inspect-it:ai-has-key', () => Boolean(readAiKey()));
+  ipcMain.handle('inspect-it:ai-chat', (event, payload) => {
     const requestId = String(payload?.requestId || `ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
     void performAiChat(event.sender, requestId, payload ?? {});
     return { requestId };
   });
-  ipcMain.handle('inspect-this:ai-abort', (_event, requestId) => {
+  ipcMain.handle('inspect-it:ai-abort', (_event, requestId) => {
     const active = activeAiRequests.get(String(requestId));
     if (active) active.controller.abort();
     return true;

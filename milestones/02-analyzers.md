@@ -2,7 +2,7 @@
 
 ## Objective
 
-Expand Inspect This into a genuinely broad universal analyzer.
+Expand Inspect It into a genuinely broad universal analyzer.
 
 Read AGENTS.md before beginning.
 

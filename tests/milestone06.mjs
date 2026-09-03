@@ -69,7 +69,7 @@ async function diagnoseScannedPdf(makeItem, label) {
   }
   // Persist the failing PDF to a temp dir so CI artifacts can capture it.
   try {
-    const dir = mkdtempSync(path.join(tmpdir(), 'inspect-this-ocr-'));
+    const dir = mkdtempSync(path.join(tmpdir(), 'inspect-it-ocr-'));
     const file = path.join(dir, item.name);
     writeFileSync(file, Buffer.from(pdfBytes));
     console.error(`[milestone06][${label}] wrote failing fixture to ${file}`);

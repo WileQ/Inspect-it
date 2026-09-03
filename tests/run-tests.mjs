@@ -95,8 +95,8 @@ function pngFile() {
 }
 
 function clearStorage() {
-  storageRemove('inspect-this.history');
-  storageRemove('inspect-this.cache');
+  storageRemove('inspect-it.history');
+  storageRemove('inspect-it.cache');
 }
 
 async function main() {
@@ -156,7 +156,7 @@ async function main() {
   await runMilestoneFourTests();
   await runProductionTests();
   await runMilestoneSixTests();
-  console.log('All Inspect This tests passed.');
+  console.log('All Inspect It tests passed.');
 }
 
 main().catch((error) => {

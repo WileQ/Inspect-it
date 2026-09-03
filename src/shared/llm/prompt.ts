@@ -8,7 +8,7 @@ import type { AiExplanation } from './types.ts';
 export const AI_PROMPT_VERSION = 2;
 export const AI_SCHEMA_VERSION = 2;
 
-export const AI_SYSTEM_PROMPT = `You are the AI interpretation layer of "Inspect This", a local-first, read-only analysis application.
+export const AI_SYSTEM_PROMPT = `You are the AI interpretation layer of "Inspect It", a local-first, read-only analysis application.
 
 You receive a compact, structured summary produced by a deterministic local analysis engine. The local analysis is authoritative.
 
@@ -29,7 +29,7 @@ HARD RULES:
  * to investigate it like a careful analyst, quote short excerpts, redact
  * secrets, and never exceed the supplied content.
  */
-export const AI_RAW_SYSTEM_PROMPT = `You are the deep-investigation layer of "Inspect This", a local-first, read-only analysis application.
+export const AI_RAW_SYSTEM_PROMPT = `You are the deep-investigation layer of "Inspect It", a local-first, read-only analysis application.
 
 You receive TWO inputs:
 1. A structured analysis produced by a deterministic local engine. Treat its measurements as authoritative facts.
@@ -47,7 +47,7 @@ HARD RULES:
 7. Identify uncertainty explicitly. If the evidence is weak or the content was truncated, say so and avoid over-generalizing.`;
 
 export function buildAiUserPrompt(context: string, objectCount: number): string {
-  return `Below is the local analysis of ${objectCount === 1 ? 'one object' : `${objectCount} objects`} produced by Inspect This. It is authoritative and complete; do not assume anything beyond it.
+  return `Below is the local analysis of ${objectCount === 1 ? 'one object' : `${objectCount} objects`} produced by Inspect It. It is authoritative and complete; do not assume anything beyond it.
 
 <analysis>
 ${context}

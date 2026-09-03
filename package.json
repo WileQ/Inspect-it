@@ -1,5 +1,5 @@
 {
-  "name": "inspect-this",
+  "name": "inspect-it",
   "private": false,
   "version": "1.0.4",
   "type": "module",
@@ -48,14 +48,14 @@
     "vite": "^6.2.1",
     "vitest": "^2.1.9"
   },
-  "productName": "Inspect This",
+  "productName": "Inspect It",
   "description": "Drop anything. Understand it. A privacy-first, read-only digital-object analyzer that lives in a floating bubble on your desktop.",
-  "author": "Inspect This contributors",
+  "author": "Inspect It contributors",
   "license": "MIT",
   "build": {
-    "appId": "com.inspectthis.desktop",
-    "productName": "Inspect This",
-    "copyright": "Copyright (c) 2026 Inspect This contributors",
+    "appId": "com.inspectit.desktop",
+    "productName": "Inspect It",
+    "copyright": "Copyright (c) 2026 Inspect It contributors",
     "asar": true,
     "directories": {
       "output": "release",
@@ -93,8 +93,8 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Inspect This",
-      "artifactName": "Inspect-This-${version}-Windows-${arch}.${ext}",
+      "shortcutName": "Inspect It",
+      "artifactName": "Inspect-It-${version}-Windows-${arch}.${ext}",
       "deleteAppDataOnUninstall": false
     },
     "mac": {
@@ -115,15 +115,15 @@
       "icon": "build/icon.png",
       "category": "Utility",
       "synopsis": "Privacy-first digital-object analyzer",
-      "maintainer": "Inspect This contributors",
-      "executableName": "inspect-this",
+      "maintainer": "Inspect It contributors",
+      "executableName": "inspect-it",
       "syncDesktopName": true
     }
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/inspect-this/inspect-this"
+    "url": "https://github.com/WileQ/Inspect-it"
   },
-  "homepage": "https://github.com/inspect-this/inspect-this",
-  "desktopName": "inspect-this.desktop"
+  "homepage": "https://github.com/WileQ/Inspect-it",
+  "desktopName": "inspect-it.desktop"
 }

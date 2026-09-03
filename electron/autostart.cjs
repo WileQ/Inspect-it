@@ -11,7 +11,7 @@
 const path = require('node:path');
 const os = require('node:os');
 
-const AUTOSTART_FILE_NAME = 'inspect-this.desktop';
+const AUTOSTART_FILE_NAME = 'inspect-it.desktop';
 const ENABLED_MARKER = 'X-GNOME-Autostart-enabled=true';
 
 /** Directory for XDG autostart entries (honors $XDG_CONFIG_HOME). */
@@ -30,7 +30,7 @@ function autostartFilePath(dir) {
  * path to the AppImage or installed binary; it is quoted inside the file.
  */
 function buildAutostartDesktopEntry(execPath, options = {}) {
-  const name = options.name || 'Inspect This';
+  const name = options.name || 'Inspect It';
   const comment = options.comment || 'Drop anything. Understand it.';
   return [
     '[Desktop Entry]',

@@ -1,7 +1,7 @@
 ---
-# Inspect This — Master Development Specification
+# Inspect It — Master Development Specification
 
-This document is the authoritative specification for the Inspect This project.
+This document is the authoritative specification for the Inspect It project.
 
 You are responsible for actually implementing this application, not merely planning it.
 
@@ -28,7 +28,7 @@ run tests, and fix errors before considering the task complete.
 
 The full product specification follows.
 
-# INSPECT THIS — COMPLETE BUILD SPECIFICATION
+# INSPECT IT — COMPLETE BUILD SPECIFICATION
 
 ## 0. ROLE
 
@@ -48,17 +48,17 @@ The application should be production-quality, modular, extensible, privacy-first
 
 ## Name
 
-**Inspect This**
+**Inspect It**
 
 ## Tagline
 
 > **Drop anything. Understand it.**
 
-Inspect This is a privacy-first universal digital-object analysis application.
+Inspect It is a privacy-first universal digital-object analysis application.
 
 The core idea:
 
-> A user can drop almost any digital object into Inspect This and immediately get a structured analysis of what it is, what matters, what is unusual, and what they should investigate.
+> A user can drop almost any digital object into Inspect It and immediately get a structured analysis of what it is, what matters, what is unusual, and what they should investigate.
 
 The application **does not require an LLM**.
 
@@ -72,7 +72,7 @@ The application must never modify the analyzed source data.
 
 # 2. CORE PRODUCT PHILOSOPHY
 
-Inspect This should NOT feel like:
+Inspect It should NOT feel like:
 
 > "Upload a file to ChatGPT."
 
@@ -87,7 +87,7 @@ The LLM is an optional enhancement.
 The fundamental architecture is:
 
 ```text
-                    INSPECT THIS
+                    INSPECT IT
                          │
              ┌───────────┴───────────┐
              │                       │
@@ -256,7 +256,7 @@ The expanded panel should look approximately like:
 
 ```text
 ┌────────────────────────────────────────────────────────┐
-│ ✦ Inspect This                                  ─ □ × │
+│ ✦ Inspect It                                  ─ □ × │
 ├────────────────────────────────────────────────────────┤
 │                                                        │
 │                  DROP ANYTHING                         │
@@ -371,7 +371,7 @@ Instead:
 
 > Larger than 99.2% of files in this project.
 
-The user should be able to understand **why** Inspect This reached a conclusion.
+The user should be able to understand **why** Inspect It reached a conclusion.
 
 ---
 
@@ -1394,7 +1394,7 @@ Limit:
 
 This is non-negotiable.
 
-Inspect This is an **inspection application**.
+Inspect It is an **inspection application**.
 
 It must never:
 
@@ -1445,7 +1445,7 @@ Implement:
 
 ### Ctrl/Cmd + Space
 
-Open/focus Inspect This.
+Open/focus Inspect It.
 
 The exact modifier should follow platform conventions.
 
@@ -1474,7 +1474,7 @@ Copy text
    ↓
 Ctrl + Shift + V
    ↓
-Inspect This
+Inspect It
    ↓
 analysis
 ```
@@ -1538,7 +1538,7 @@ AI ANALYSIS
 
 Local analysis is complete.
 
-Inspect This can send the following
+Inspect It can send the following
 structured information to your configured model:
 
 ✓ file metadata
@@ -1999,7 +1999,7 @@ The GitHub README should immediately communicate the idea.
 Opening section:
 
 ```text
-# Inspect This
+# Inspect It
 
 ### Drop anything. Understand it.
 
@@ -2008,7 +2008,7 @@ A privacy-first universal digital object analyzer.
 Drop a file, folder, dataset, image, PDF,
 Git repository, website, log, or database.
 
-Inspect This tells you:
+Inspect It tells you:
 
 🔍 What is this?
 🚨 What matters?
@@ -2058,7 +2058,7 @@ Emphasize:
 
 The project's philosophy should be:
 
-> **AI can explain your data, but Inspect This should understand its structure without AI.**
+> **AI can explain your data, but Inspect It should understand its structure without AI.**
 
 ---
 
@@ -2292,7 +2292,7 @@ A user should be able to experience the core magic within **30 seconds of instal
 
 The most important UX test is:
 
-A user installs Inspect This.
+A user installs Inspect It.
 
 They see:
 
@@ -2402,7 +2402,7 @@ Before considering the implementation complete, verify:
 
 # 69. MOST IMPORTANT PRODUCT PRINCIPLE
 
-**Do not make Inspect This an AI wrapper.**
+**Do not make Inspect It an AI wrapper.**
 
 The core product is:
 
@@ -2413,7 +2413,7 @@ AI is an optional interpretation layer.
 The ideal experience is:
 
 ```text
-                    INSPECT THIS
+                    INSPECT IT
                          │
                  ┌───────▼────────┐
                  │  LOCAL ENGINE  │
@@ -2433,7 +2433,7 @@ The ideal experience is:
               LOCAL ONLY      OPTIONAL AI
 ```
 
-**If the AI provider disappears tomorrow, Inspect This should still be a useful and impressive application.**
+**If the AI provider disappears tomorrow, Inspect It should still be a useful and impressive application.**
 
 That is the standard the implementation should meet.
 

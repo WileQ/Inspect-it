@@ -32,9 +32,9 @@ export async function runProductionTests() {
   {
     const pkg = JSON.parse(read('package.json'));
     assert.match(pkg.version, /^\d+\.\d+\.\d+$/, 'semver version');
-    assert.equal(pkg.productName, 'Inspect This', 'productName');
+    assert.equal(pkg.productName, 'Inspect It', 'productName');
     assert.equal(pkg.license, 'MIT', 'license');
-    assert.equal(pkg.build.appId, 'com.inspectthis.desktop', 'appId');
+    assert.equal(pkg.build.appId, 'com.inspectit.desktop', 'appId');
     assert.ok(pkg.build.win?.target, 'win packaging target configured');
     assert.ok(pkg.build.nsis, 'nsis installer configured');
     assert.ok(pkg.build.mac?.target, 'mac packaging target configured');
@@ -51,7 +51,7 @@ export async function runProductionTests() {
       assert.ok(pkg.scripts[script].includes('--publish never'), `script ${script} uses --publish never`);
     }
     // Linux desktop entry name + sync (electron-builder window association).
-    assert.equal(pkg.desktopName, 'inspect-this.desktop', 'package.json desktopName set');
+    assert.equal(pkg.desktopName, 'inspect-it.desktop', 'package.json desktopName set');
     assert.equal(pkg.build.linux.syncDesktopName, true, 'linux.syncDesktopName enabled');
     const linuxTargets = String(pkg.build.linux.target).toLowerCase();
     assert.ok(linuxTargets.includes('appimage'), 'linux AppImage target configured');
@@ -208,20 +208,20 @@ export async function runProductionTests() {
   // --- Linux autostart entry (pure builder) ---------------------------------
   {
     const { buildAutostartDesktopEntry, autostartDir, autostartFilePath, isEntryEnabled, AUTOSTART_FILE_NAME } = await import('../electron/autostart.cjs');
-    const entry = buildAutostartDesktopEntry('/opt/Inspect This/Inspect This.AppImage');
+    const entry = buildAutostartDesktopEntry('/opt/Inspect It/Inspect It.AppImage');
     assert.ok(entry.includes('[Desktop Entry]'), 'desktop entry header');
     assert.ok(entry.includes('Type=Application'), 'desktop entry type');
-    assert.ok(entry.includes('Exec="/opt/Inspect This/Inspect This.AppImage"'), 'exec path quoted and escaped');
+    assert.ok(entry.includes('Exec="/opt/Inspect It/Inspect It.AppImage"'), 'exec path quoted and escaped');
     assert.ok(entry.includes('X-GNOME-Autostart-enabled=true'), 'autostart enabled marker');
     assert.equal(isEntryEnabled(entry), true, 'enabled entry detected');
     assert.equal(isEntryEnabled('[Desktop Entry]\nHidden=true\n'), false, 'disabled entry detected');
-    assert.equal(AUTOSTART_FILE_NAME, 'inspect-this.desktop', 'autostart file name');
+    assert.equal(AUTOSTART_FILE_NAME, 'inspect-it.desktop', 'autostart file name');
     const normalize = (value) => value.replace(/\\/g, '/');
     const dir = autostartDir({ XDG_CONFIG_HOME: '/tmp/custom' }, '/home/test');
     assert.ok(normalize(dir).endsWith('/tmp/custom/autostart'), 'XDG_CONFIG_HOME honored');
     const defaultDir = autostartDir({}, '/home/test');
     assert.ok(normalize(defaultDir).endsWith('/home/test/.config/autostart'), 'default autostart dir');
-    assert.ok(autostartFilePath(defaultDir).endsWith('inspect-this.desktop'), 'autostart file path');
+    assert.ok(autostartFilePath(defaultDir).endsWith('inspect-it.desktop'), 'autostart file path');
   }
 
   console.log('Milestone 05 production-readiness tests passed.');

@@ -1,4 +1,4 @@
-﻿// Fixture generators for the Inspect This test suite.
+﻿// Fixture generators for the Inspect It test suite.
 // Fixtures are real files (or structurally valid containers) generated in
 // memory so the repository stays small and CI needs no network access.
 import JSZip from 'jszip';
@@ -145,7 +145,7 @@ export async function makePdfItem() {
     `<< /Length ${page1.length} /Filter /FlateDecode >>\nstream\n${toLatin1(page1)}\nendstream`,
     `<< /Length ${page2.length} /Filter /FlateDecode >>\nstream\n${toLatin1(page2)}\nendstream`,
     '<< /Type /Annot /Subtype /Link /A << /S /URI /URI (https://example.com/report) >> >>',
-    '<< /Title (Sample Report) /Author (Inspect This) /Producer (Test Suite) >>'
+    '<< /Title (Sample Report) /Author (Inspect It) /Producer (Test Suite) >>'
   ];
   const parts = [latin1Bytes('%PDF-1.4\n')];
   const offsets = [0];

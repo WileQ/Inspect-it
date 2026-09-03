@@ -1,6 +1,6 @@
 ﻿# Platform support
 
-Inspect This is a cross-platform desktop app (Electron + Vite/React) with a
+Inspect It is a cross-platform desktop app (Electron + Vite/React) with a
 browser build. The analysis engine is entirely local and platform-neutral; the
 desktop shell adds the bubble, tray, global shortcut, and native file access.
 
@@ -43,13 +43,13 @@ ignore; GNOME may respect it, others may not.
 ### AppImage
 - Requires FUSE: `sudo apt install libfuse2` on Ubuntu 22.04+.
 - If FUSE is unavailable, extract instead:
-  `./Inspect-This.AppImage --appimage-extract` then run
+  `./Inspect-It.AppImage --appimage-extract` then run
   `./squashfs-root/AppRun`.
 
 ### Launch at login
 Implemented via an XDG autostart entry at
-`$XDG_CONFIG_HOME/autostart/inspect-this.desktop`
-(usually `~/.config/autostart/inspect-this.desktop`). When running from an
+`$XDG_CONFIG_HOME/autostart/inspect-it.desktop`
+(usually `~/.config/autostart/inspect-it.desktop`). When running from an
 AppImage, the entry points at the AppImage; otherwise at the installed binary.
 Disabling it removes the file. If the entry is missing, re-enable launch at
 login in Settings.

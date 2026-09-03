@@ -5,7 +5,7 @@
 // locally - never fetched from a CDN. Three execution paths:
 //
 //   1. Desktop (Electron): OCR runs in the main process (Node) via the
-//      `inspectThisDesktop.ocr` bridge, so it works under file:// with no
+//      `inspectItDesktop.ocr` bridge, so it works under file:// with no
 //      renderer fetch restrictions.
 //   2. Browser: OCR runs in a web worker using local asset URLs copied from
 //      public/ocr into the build.
@@ -55,14 +55,14 @@ export interface OcrBridgeResult {
 import { decodeJpegToPng, looksLikeJpeg } from './image-codec.ts';
 
 /**
- * Diagnostics for OCR runs. Gated behind INSPECT_THIS_OCR_DEBUG so normal
+ * Diagnostics for OCR runs. Gated behind INSPECT_IT_OCR_DEBUG so normal
  * operation stays quiet; CI enables it to surface the exact OCR state (image
  * format, normalization, engine paths, outcome) without printing contents.
  */
 function ocrDebug(...args: unknown[]): void {
   const enabled =
     typeof process !== 'undefined' &&
-    Boolean((process.env as Record<string, string | undefined>)?.INSPECT_THIS_OCR_DEBUG);
+    Boolean((process.env as Record<string, string | undefined>)?.INSPECT_IT_OCR_DEBUG);
   if (enabled) {
     console.error('[ocr-debug]', ...args);
   }
@@ -93,7 +93,7 @@ function isNodeEnvironment(): boolean {
 
 function desktopBridge(): { run(bytes: Uint8Array): Promise<OcrBridgeResult> } | null {
   if (typeof window === 'undefined') return null;
-  const bridge = (window as unknown as { inspectThisDesktop?: { ocr?: { run(bytes: Uint8Array): Promise<OcrBridgeResult> } } }).inspectThisDesktop?.ocr;
+  const bridge = (window as unknown as { inspectItDesktop?: { ocr?: { run(bytes: Uint8Array): Promise<OcrBridgeResult> } } }).inspectItDesktop?.ocr;
   return bridge ?? null;
 }
 

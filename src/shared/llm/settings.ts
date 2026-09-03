@@ -12,8 +12,8 @@
 import { storageGet, storageRemove, storageSet } from '../storage.ts';
 import type { DesktopAiBridge, LlmSettings } from './types.ts';
 
-export const AI_SETTINGS_STORAGE_KEY = 'inspect-this.ai-settings';
-export const AI_KEY_STORAGE_KEY = 'inspect-this.ai-key';
+export const AI_SETTINGS_STORAGE_KEY = 'inspect-it.ai-settings';
+export const AI_KEY_STORAGE_KEY = 'inspect-it.ai-key';
 
 export const DEFAULT_LLM_SETTINGS: LlmSettings = {
   enabled: false,
@@ -78,7 +78,7 @@ export function saveLlmSettings(settings: LlmSettings): void {
 
 function desktopBridge(): DesktopAiBridge | null {
   if (typeof window === 'undefined') return null;
-  const bridge = (window as unknown as { inspectThisDesktop?: { ai?: DesktopAiBridge } }).inspectThisDesktop?.ai;
+  const bridge = (window as unknown as { inspectItDesktop?: { ai?: DesktopAiBridge } }).inspectItDesktop?.ai;
   return bridge ?? null;
 }
 

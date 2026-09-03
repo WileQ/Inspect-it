@@ -2,12 +2,12 @@
 
 ## Objective
 
-Build the first complete end-to-end Inspect This experience.
+Build the first complete end-to-end Inspect It experience.
 
 The user must be able to:
 
 1. Launch the desktop application.
-2. See the floating Inspect This bubble.
+2. See the floating Inspect It bubble.
 3. Click the bubble.
 4. Open the inspection panel.
 5. Drag a file/folder onto the bubble.

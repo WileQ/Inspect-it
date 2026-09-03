@@ -155,7 +155,7 @@ function FindingRow(props: { finding: Finding; evidence: Map<string, string>; sh
 /* ------------------------------------------------------------------ */
 
 export default function App() {
-  const desktop = Boolean(window.inspectThisDesktop);
+  const desktop = Boolean(window.inspectItDesktop);
   const [mode, setMode] = useState<Mode>(desktop ? 'bubble' : 'panel');
   const [session, setSession] = useState<AnalysisSession | null>(null);
   const [result, setResult] = useState<AnalysisResult | null>(null);
@@ -179,11 +179,11 @@ export default function App() {
   const aiRunRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    if (!desktop || !window.inspectThisDesktop) {
+    if (!desktop || !window.inspectItDesktop) {
       return;
     }
     let disposed = false;
-    window.inspectThisDesktop.getWindowState().then((state) => {
+    window.inspectItDesktop.getWindowState().then((state) => {
       if (disposed) {
         return;
       }
@@ -197,7 +197,7 @@ export default function App() {
         panelMode: state.expanded
       }));
     });
-    const unsubscribe = window.inspectThisDesktop.onModeChange((nextMode) => {
+    const unsubscribe = window.inspectItDesktop.onModeChange((nextMode) => {
       setMode(nextMode);
       setSettings((current) => ({ ...current, panelMode: nextMode === 'panel' }));
     });
@@ -217,7 +217,7 @@ export default function App() {
       return;
     }
     let disposed = false;
-    void window.inspectThisDesktop
+    void window.inspectItDesktop
       ?.getAutoLaunch()
       .then((enabled) => {
         if (!disposed) {
@@ -320,7 +320,7 @@ export default function App() {
       return;
     }
     if (desktop && mode === 'bubble') {
-      await window.inspectThisDesktop?.setExpanded(true);
+      await window.inspectItDesktop?.setExpanded(true);
       setMode('panel');
     }
     await startInspection(items);
@@ -362,7 +362,7 @@ export default function App() {
       progress: { completed: 0, total: 1, step: 'Preparing inspection' }
     });
     if (desktop && mode === 'bubble') {
-      await window.inspectThisDesktop?.setExpanded(true);
+      await window.inspectItDesktop?.setExpanded(true);
       setMode('panel');
     }
     try {
@@ -530,14 +530,14 @@ export default function App() {
     });
     if (desktop) {
       setMode('panel');
-      window.inspectThisDesktop?.setExpanded(true);
+      window.inspectItDesktop?.setExpanded(true);
     }
   };
 
   const bubbleClick = async () => {
     if (desktop) {
       const next = mode === 'panel' ? 'bubble' : 'panel';
-      await window.inspectThisDesktop?.setExpanded(next === 'panel');
+      await window.inspectItDesktop?.setExpanded(next === 'panel');
       setMode(next);
       return;
     }
@@ -547,7 +547,7 @@ export default function App() {
   const closePanel = async () => {
     if (desktop) {
       setMode('bubble');
-      await window.inspectThisDesktop?.setExpanded(false);
+      await window.inspectItDesktop?.setExpanded(false);
       return;
     }
     setMode('bubble');
@@ -581,7 +581,7 @@ export default function App() {
     const next = !Boolean(settings.launchAtLogin);
     setSettings((current) => ({ ...current, launchAtLogin: next }));
     if (desktop) {
-      void window.inspectThisDesktop?.setAutoLaunch(next);
+      void window.inspectItDesktop?.setAutoLaunch(next);
     }
   };
 
@@ -592,7 +592,7 @@ export default function App() {
     }
     dragRef.current = { startX: event.screenX, startY: event.screenY, moved: false };
     event.currentTarget.setPointerCapture?.(event.pointerId);
-    void window.inspectThisDesktop?.beginDrag();
+    void window.inspectItDesktop?.beginDrag();
   };
 
   const onBubblePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -606,7 +606,7 @@ export default function App() {
       drag.moved = true;
     }
     if (drag.moved) {
-      void window.inspectThisDesktop?.dragBy(dx, dy);
+      void window.inspectItDesktop?.dragBy(dx, dy);
     }
   };
 
@@ -614,7 +614,7 @@ export default function App() {
     const drag = dragRef.current;
     dragRef.current = null;
     event.currentTarget.releasePointerCapture?.(event.pointerId);
-    void window.inspectThisDesktop?.endDrag();
+    void window.inspectItDesktop?.endDrag();
     if (drag && !drag.moved) {
       await bubbleClick();
     }
@@ -641,7 +641,7 @@ export default function App() {
     }
     drag.lastX = event.screenX;
     drag.lastY = event.screenY;
-    void window.inspectThisDesktop?.panelResizeBy(dx, dy);
+    void window.inspectItDesktop?.panelResizeBy(dx, dy);
   };
 
   const onResizePointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -874,7 +874,7 @@ export default function App() {
         }}
         onDragLeave={() => setDropActive(false)}
         onDrop={openDroppedOnBubble}
-        title="Inspect This - drop anything or click"
+        title="Inspect It - drop anything or click"
       >
         <div className="bubble-core">
           <SparkIcon size={26} className="bubble-spark" />
@@ -896,7 +896,7 @@ export default function App() {
       <header className="panel-header">
         <div className="title-group">
           <SparkIcon size={15} className="title-spark" />
-          <div className="app-name">Inspect This</div>
+          <div className="app-name">Inspect It</div>
           <span className={`privacy-pill ${aiSettings.enabled && aiKeyPresent ? 'ai' : ''}`}>
             {aiSettings.enabled && aiKeyPresent ? 'AI READY' : 'LOCAL ONLY'}
           </span>
@@ -932,7 +932,7 @@ export default function App() {
             </label>
             {desktop ? (
               <label className="setting-row">
-                <span>Start Inspect This when I log in</span>
+                <span>Start Inspect It when I log in</span>
                 <input type="checkbox" checked={Boolean(settings.launchAtLogin)} onChange={toggleLaunchAtLogin} />
               </label>
             ) : null}
@@ -1008,7 +1008,7 @@ export default function App() {
             {!settings.onboardingSeen ? (
               <section className="onboarding-card">
                 <div className="onboarding-title">Drop anything onto the bubble.</div>
-                <p className="onboarding-note">Inspect This analyzes it locally - your files are never modified.</p>
+                <p className="onboarding-note">Inspect It analyzes it locally - your files are never modified.</p>
                 <p className="onboarding-note">AI is optional. Nothing is uploaded unless you ask.</p>
                 <button
                   type="button"

@@ -108,22 +108,22 @@ The analyzer engine lives in `src/shared/` and is shared between the desktop app
 
 ### macOS (release build)
 
-1. Download `Inspect-This-1.0.0-macOS-<arch>.dmg` from the [Releases](../../releases) page (choose the build for your Mac: Apple Silicon `arm64` or Intel `x64`).
-2. Open the DMG and drag **Inspect This** into your Applications folder.
+1. Download `Inspect-It-1.0.0-macOS-<arch>.dmg` from the [Releases](../../releases) page (choose the build for your Mac: Apple Silicon `arm64` or Intel `x64`).
+2. Open the DMG and drag **Inspect It** into your Applications folder.
 3. Launch it. The first time, right-click the app and choose **Open** if macOS Gatekeeper complains (the app is not notarized in community builds).
 
 > The menu-bar icon, the global shortcut, and launch-at-login use the macOS conventions. `Cmd+Space` is reserved by Spotlight, so the default shortcut is **Control+Space** (falls back to `Cmd+Shift+Space`).
 
 ### Linux (release build)
 
-1. Download `Inspect-This-1.0.0.AppImage` (or the `.deb` for Debian/Ubuntu) from the [Releases](../../releases) page.
+1. Download `Inspect-It-1.0.0.AppImage` (or the `.deb` for Debian/Ubuntu) from the [Releases](../../releases) page.
 2. Make the AppImage executable and run it, or install the `.deb`:
 
    ```bash
-   chmod +x Inspect-This-1.0.0.AppImage
-   ./Inspect-This-1.0.0.AppImage
+   chmod +x Inspect-It-1.0.0.AppImage
+   ./Inspect-It-1.0.0.AppImage
    # or
-   sudo apt install ./inspect-this_1.0.0_amd64.deb
+   sudo apt install ./inspect-it_1.0.0_amd64.deb
    ```
 
 3. Some desktop environments need the AppImage runtime; install `libfuse2` if you see a FUSE error (Ubuntu 22.04+):

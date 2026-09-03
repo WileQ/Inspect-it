@@ -1,4 +1,4 @@
-﻿// Generates the Inspect This app icons (PNG) without external image libraries:
+﻿// Generates the Inspect It app icons (PNG) without external image libraries:
 //   build/icon.png  (512x512)  - used by electron-builder for the app/installer icon
 //   build/tray.png  (32x32)    - system tray icon
 //

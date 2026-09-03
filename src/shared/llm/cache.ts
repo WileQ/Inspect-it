@@ -15,7 +15,7 @@ import { AI_PROMPT_VERSION, AI_SCHEMA_VERSION } from './prompt.ts';
 import type { RawContentInput } from './context.ts';
 import type { AiExplanation, LlmSettings } from './types.ts';
 
-export const AI_CACHE_STORAGE_KEY = 'inspect-this.ai-cache';
+export const AI_CACHE_STORAGE_KEY = 'inspect-it.ai-cache';
 const AI_CACHE_MAX_ENTRIES = 40;
 
 function readCache(): Record<string, AiExplanation> {

@@ -1,8 +1,8 @@
-# Release Notes ? Inspect This 1.0.0
+# Release Notes ? Inspect It 1.0.0
 
-## What is Inspect This?
+## What is Inspect It?
 
-Inspect This is a privacy-first, read-only digital-object analyzer. It lives as a
+Inspect It is a privacy-first, read-only digital-object analyzer. It lives as a
 small orange floating bubble on your desktop: drop a file, folder, archive,
 database, or website URL onto it and get a structured, evidence-backed analysis
 of what it is, what matters, what is unusual, and what to investigate next.
@@ -25,8 +25,8 @@ OpenAI-compatible AI layer can add a plain-English interpretation on top.
 
 ## Supported platforms
 
-- Windows x64 ? installable NSIS build (`Inspect-This-1.0.0-Windows-x64.exe`)
-- macOS x64 + arm64 ? DMG/ZIP builds (`Inspect-This-1.0.0-macOS-<arch>.dmg`)
+- Windows x64 ? installable NSIS build (`Inspect-It-1.0.0-Windows-x64.exe`)
+- macOS x64 + arm64 ? DMG/ZIP builds (`Inspect-It-1.0.0-macOS-<arch>.dmg`)
 - Linux x64 ? AppImage and `.deb` builds
 - Browser ? drag-and-drop analysis (files you explicitly select)
 
@@ -66,8 +66,8 @@ See `docs/PLATFORMS.md` for details and troubleshooting.
 
 ## Installation
 
-- **Windows**: download `Inspect-This-1.0.0-Windows-x64.exe`, run the installer
-  (no Node/npm/terminal required), and launch Inspect This. Uninstalling
+- **Windows**: download `Inspect-It-1.0.0-Windows-x64.exe`, run the installer
+  (no Node/npm/terminal required), and launch Inspect It. Uninstalling
   preserves your analysis history and settings.
 - **macOS**: download the DMG for your architecture, drag the app into
   Applications, and open it (right-click -> Open the first time).

@@ -146,7 +146,7 @@ export interface AppSettings {
   panelMode?: boolean;
   showHistory?: boolean;
   detailedReport?: boolean;
-  /** Start Inspect This when the user logs in (desktop only, default off). */
+  /** Start Inspect It when the user logs in (desktop only, default off). */
   launchAtLogin?: boolean;
   /** Whether the first-launch onboarding card has been dismissed. */
   onboardingSeen?: boolean;

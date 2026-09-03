@@ -1,9 +1,9 @@
 import type { AppSettings, AnalysisResult, HistoryEntry } from './types.ts';
 import { storageGet, storageSet } from './storage.ts';
 
-const HISTORY_KEY = 'inspect-this.history';
-const CACHE_KEY = 'inspect-this.cache';
-const SETTINGS_KEY = 'inspect-this.settings';
+const HISTORY_KEY = 'inspect-it.history';
+const CACHE_KEY = 'inspect-it.cache';
+const SETTINGS_KEY = 'inspect-it.settings';
 
 function readJson<T>(key: string, fallback: T): T {
   const raw = storageGet(key);
