@@ -75,6 +75,12 @@ export async function analyzePdfFile(file: InspectionFile, options: { signal: Ab
   const snippets = extraction.snippets;
   const perPage = extraction.perPage;
   const extractionWarnings = extraction.warnings;
+  // A PDF whose header is valid but whose structure could not be fully parsed
+  // (missing/invalid xref, malformed objects, fallback extractor used) should
+  // be flagged, not silently treated as fully healthy.
+  const structuralWarning = extractionWarnings.find(
+    (warning) => /fallback|could not extract|unavailable/i.test(warning)
+  );
   // Metadata prefers the pdfjs document info dict; the raw scan is a fallback.
   const metadata = extraction.metadata ?? extractPdfMetadataFromRaw(`${headerText}\n${extractPdfStreamText(headerText)}`);
   const searchableRaw = `${headerText}\n${extractPdfStreamText(headerText)}`;
@@ -125,6 +131,9 @@ export async function analyzePdfFile(file: InspectionFile, options: { signal: Ab
       evidence('pdf-outline', 'Outline items', formatNumber(structure.outlineCount)),
       evidence('pdf-destinations', 'Named destinations', formatNumber(structure.destinationsCount))
     );
+  }
+  if (structuralWarning && !evidenceList.some((entry) => entry.id === 'pdf-structure-warning')) {
+    evidenceList.push(evidence('pdf-structure-warning', 'Structure warning', structuralWarning.slice(0, 300)));
   }
   const sections: AnalysisSection[] = [
     {
@@ -198,7 +207,11 @@ export async function analyzePdfFile(file: InspectionFile, options: { signal: Ab
       }
     }
   }
-  const textDensity = pageCount ? wordCount / pageCount : 0;
+  // OCR-recovered words are folded into density/empty-page signals so a scanned
+  // PDF is not reported as "no text" after OCR already recovered readable text.
+  const ocrWordTotal = ocrPages.reduce((sum, page) => sum + tokenizeWords(page.text).length, 0);
+  const combinedWordCount = wordCount + ocrWordTotal;
+  const textDensity = pageCount ? combinedWordCount / pageCount : 0;
   const emptyPageRatio = pageCount ? blankPages / pageCount : 0;
   const repeatedCounts = new Map<string, number>();
   for (const snippet of textSnippets) {
@@ -230,6 +243,18 @@ export async function analyzePdfFile(file: InspectionFile, options: { signal: Ab
     ]
   });
   const unusual: Finding[] = [];
+  if (structuralWarning) {
+    unusual.push({
+      id: 'pdf-structure-warning',
+      title: 'PDF structure could not be fully parsed',
+      summary: structuralWarning.slice(0, 300),
+      severity: 'low',
+      evidence: ['pdf-structure-warning'],
+      methodology: 'heuristic',
+      confidence: 'medium',
+      category: 'structure'
+    });
+  }
   if (structure?.encrypted) {
     unusual.push({
       id: 'pdf-encrypted',
@@ -278,8 +303,8 @@ export async function analyzePdfFile(file: InspectionFile, options: { signal: Ab
       category: 'structure'
     });
   }
-  if (scannedLikely) {
-    unusual.push(finding('pdf-ocr', 'OCR opportunity', 'The PDF appears to be image-only or nearly image-only.', 'medium', ['pdf-text-snippets', 'pdf-images']));
+  if (scannedLikely && ocrPages.length === 0) {
+    unusual.push(finding('pdf-ocr', 'OCR opportunity', 'The PDF appears to be image-only or nearly image-only; OCR has not recovered text yet.', 'medium', ['pdf-text-snippets', 'pdf-images']));
   }
   if (metadata?.title && metadata?.author && metadata.title === metadata.author) {
     unusual.push(finding('pdf-meta-same', 'Repeated metadata', 'Title and author are identical, which can be unusual for exported documents.', 'low', ['pdf-title', 'pdf-author']));
@@ -344,6 +369,8 @@ export async function analyzePdfFile(file: InspectionFile, options: { signal: Ab
   if (ocrPages.length) {
     const combinedOcr = ocrPages.map((entry) => entry.text).join(' ');
     evidenceList.push(evidence('pdf-ocr-text', 'OCR text', combinedOcr.slice(0, 300)));
+    evidenceList.push(evidence('pdf-ocr-words', 'OCR words', formatNumber(ocrWordTotal)));
+    evidenceList.push(evidence('pdf-words-with-ocr', 'Words (incl. OCR)', formatNumber(combinedWordCount)));
     sections.push({
       id: 'pdf-ocr',
       title: 'OCR (scanned pages)',
@@ -367,7 +394,7 @@ export async function analyzePdfFile(file: InspectionFile, options: { signal: Ab
     });
   }
   const recommendations: Finding[] = [];
-  if (scannedLikely) {
+  if (scannedLikely && ocrPages.length === 0) {
     recommendations.push(finding('pdf-ocr-reco', 'Consider OCR', 'Text extraction appears limited; OCR may recover more content.', 'low', ['pdf-text-snippets']));
   }
   const limitations: string[] = [];
@@ -883,12 +910,53 @@ async function analyzeLegacyXls(file: InspectionFile): Promise<AnalysisResult> {
   );
 }
 
+/**
+ * Run an OOXML analyzer defensively. Malformed/empty/truncated ZIP packages or
+ * malformed XML inside a valid package must NEVER crash the inspection: they
+ * return a graceful error report instead (mirroring the invalid-PDF path).
+ */
+async function analyzeOfficePackage(
+  file: InspectionFile,
+  analyzerId: string,
+  analyzerName: string,
+  format: string,
+  run: () => Promise<AnalysisResult>
+): Promise<AnalysisResult> {
+  try {
+    return await run();
+  } catch (error) {
+    const fingerprint = await digestHex(await readBytes(file, 1024 * 1024));
+    const detail = error instanceof Error ? error.message : 'Malformed or unsupported package';
+    const summary = `Could not read ${format} package: ${detail}`;
+    const errorId = `${analyzerId}-error`;
+    const invalidId = `${analyzerId}-invalid`;
+    return {
+      objectKind: 'file',
+      analyzerId,
+      analyzerName,
+      capabilities: [],
+      limitations: ['Malformed package; only an error report is available'],
+      targetName: file.name,
+      identity: identity(file, format, fingerprint),
+      sections: [{ id: `${analyzerId}-facts`, title: 'Facts', items: [evidence(errorId, 'Package', summary)] }],
+      important: [],
+      unusual: [finding(invalidId, `Malformed ${format}`, summary, 'high', [errorId])],
+      recommendations: [],
+      evidence: [evidence(errorId, 'Package', summary)],
+      progressLabel: `${analyzerName} failed gracefully`,
+      cacheKey: fingerprint,
+      generatedAt: new Date().toISOString(),
+      sourceSummary: `Malformed ${format}`
+    };
+  }
+}
+
 export async function analyzeDocumentFile(file: InspectionFile, options: { signal: AbortSignal }): Promise<AnalysisResult | null> {
   const ext = extension(file.name);
   if (ext === 'pdf') return analyzePdfFile(file, options);
-  if (ext === 'docx') return analyzeDocxFile(file, options);
-  if (ext === 'pptx') return analyzePptxFile(file, options);
-  if (ext === 'xlsx') return analyzeXlsxFile(file, options);
+  if (ext === 'docx') return analyzeOfficePackage(file, 'docx', 'DOCX analyzer', 'DOCX', () => analyzeDocxFile(file, options));
+  if (ext === 'pptx') return analyzeOfficePackage(file, 'pptx', 'PPTX analyzer', 'PPTX', () => analyzePptxFile(file, options));
+  if (ext === 'xlsx') return analyzeOfficePackage(file, 'xlsx', 'XLSX analyzer', 'XLSX', () => analyzeXlsxFile(file, options));
   if (ext === 'xls') return analyzeLegacyXls(file);
   if (ext === 'eml') return analyzeEmailFile(file, options);
   if (ext === 'epub') return analyzeEpubFile(file, options);

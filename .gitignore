@@ -29,3 +29,11 @@ desktop.ini
 /public/ocr/worker.min.js
 /public/ocr/core/
 
+
+# Adversarial corpus + run artifacts (regenerable)
+/adversarial-fixtures-corpus/
+/tests/adversarial/results.jsonl
+/tests/adversarial/summary-raw.json
+
+/tests/adversarial/raw-results.jsonl
+

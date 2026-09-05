@@ -385,6 +385,25 @@ function indexOfAscii(bytes: Uint8Array, needle: string, from = 0): number {
 const PNG_SIGNATURE = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 /**
+ * Find a real PDF `stream` KEYWORD. Naive substring search matches the
+ * `stream` inside `endstream`, which mis-slices byte streams. The keyword is a
+ * standalone token: the byte before it must not be a letter or digit.
+ */
+function indexOfStreamKeyword(bytes: Uint8Array, from = 0): number {
+  const target = Uint8Array.from('stream', (ch) => ch.charCodeAt(0));
+  outer: for (let i = from; i + target.length <= bytes.length; i += 1) {
+    for (let j = 0; j < target.length; j += 1) {
+      if (bytes[i + j] !== target[j]) continue outer;
+    }
+    const prev = i > 0 ? bytes[i - 1] : 0x20;
+    const isAlphaNumeric = (prev >= 0x30 && prev <= 0x39) || (prev >= 0x41 && prev <= 0x5a) || (prev >= 0x61 && prev <= 0x7a);
+    if (!isAlphaNumeric) return i;
+    i += target.length - 1; // continue searching after this candidate
+  }
+  return -1;
+}
+
+/**
  * Extract page images from a scanned PDF by scanning the raw bytes for every
  * `stream`...`endstream` pair and testing the decoded content:
  *   - raw JPEG streams start with the FFD8 SOI marker,
@@ -399,7 +418,7 @@ export function extractPdfPageImages(bytes: Uint8Array, maxImages = 12, maxBytes
   let searchFrom = 0;
   let scanned = 0;
   while (out.length < maxImages && scanned < 2000) {
-    const streamStart = indexOfAscii(bytes, 'stream', searchFrom);
+    const streamStart = indexOfStreamKeyword(bytes, searchFrom);
     if (streamStart === -1) break;
     // Require an EOL after the keyword, then find the first endstream after it.
     let bodyStart = streamStart + 'stream'.length;
@@ -470,7 +489,7 @@ export function diagnosePdfImageStreams(bytes: Uint8Array): string[] {
   let searchFrom = 0;
   let index = 0;
   while (index < 2000) {
-    const streamStart = indexOfAscii(bytes, 'stream', searchFrom);
+    const streamStart = indexOfStreamKeyword(bytes, searchFrom);
     if (streamStart === -1) break;
     let bodyStart = streamStart + 'stream'.length;
     if (bodyStart < limit && (bytes[bodyStart] === 0x0d || bytes[bodyStart] === 0x0a)) {

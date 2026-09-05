@@ -1,0 +1,94 @@
+{
+ "multi-duplicate": {
+  "analyzer": "folder",
+  "relationships": [],
+  "findings": [
+   {
+    "id": "folder-deep-exact-duplicates",
+    "title": "Exact duplicate files",
+    "severity": "medium",
+    "methodology": "fact"
+   }
+  ]
+ },
+ "near_dup_text": {
+  "analyzer": "folder",
+  "relationships": [],
+  "findings": []
+ },
+ "similar_images": {
+  "analyzer": "folder",
+  "relationships": [],
+  "findings": [
+   {
+    "id": "folder-deep-similar-images",
+    "title": "Visually similar images",
+    "severity": "low",
+    "methodology": "ml"
+   }
+  ]
+ },
+ "cross_reference": {
+  "analyzer": "folder",
+  "relationships": [],
+  "findings": []
+ },
+ "conflicting_deps": {
+  "analyzer": "folder",
+  "relationships": [],
+  "findings": [
+   {
+    "id": "folder-duplicates",
+    "title": "Duplicate files",
+    "severity": "low",
+    "methodology": null
+   }
+  ]
+ },
+ "same_name_diff_content": {
+  "analyzer": "folder",
+  "relationships": [],
+  "findings": [
+   {
+    "id": "folder-deep-dir-domination",
+    "title": "Directory dominates size",
+    "severity": "info",
+    "methodology": "anomaly"
+   }
+  ]
+ },
+ "same_size_diff_content": {
+  "analyzer": "folder",
+  "relationships": [],
+  "findings": []
+ },
+ "should_not_link": {
+  "analyzer": "folder",
+  "relationships": [],
+  "findings": []
+ },
+ "images_dir": {
+  "analyzer": "folder",
+  "relationships": [],
+  "findings": [
+   {
+    "id": "folder-deep-type-concentration",
+    "title": "Concentrated file types",
+    "severity": "info",
+    "methodology": "anomaly"
+   },
+   {
+    "id": "folder-deep-exact-duplicates",
+    "title": "Exact duplicate files",
+    "severity": "medium",
+    "methodology": "fact"
+   },
+   {
+    "id": "folder-deep-similar-images",
+    "title": "Visually similar images",
+    "severity": "low",
+    "methodology": "ml"
+   }
+  ]
+ }
+}

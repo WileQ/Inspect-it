@@ -68,18 +68,22 @@ function ocrDebug(...args: unknown[]): void {
   }
 }
 
-// Variable specifier on purpose: keeps the optional dependency out of the
-// static module graph so the dev server and bundler never try to resolve it.
-const TESSERACT_MODULE = 'tesseract.js';
-
 let availability: boolean | null = null;
 
 export async function isOcrAvailable(): Promise<boolean> {
+  // Desktop: OCR executes in the Electron main process via the bridge, so it is
+  // available whenever the app ships the engine - independent of whether this
+  // renderer can import its own copy of tesseract.js.
+  if (desktopBridge()) {
+    return true;
+  }
   if (availability !== null) {
     return availability;
   }
   try {
-    await import(/* @vite-ignore */ TESSERACT_MODULE);
+    // Browser-only path: literal specifier so Vite can bundle it. On desktop
+    // this is never reached (the bridge check above already returned true).
+    await import('tesseract.js');
     availability = true;
   } catch {
     availability = false;
@@ -289,7 +293,7 @@ export async function ocrImage(bytes: Uint8Array): Promise<OcrOutcome> {
     };
   }
   try {
-    const Tesseract = await import(/* @vite-ignore */ TESSERACT_MODULE);
+    const Tesseract = await import('tesseract.js');
     const options: Record<string, unknown> = {};
     // tesseract.js throws from its message handler when a job rejects and no
     // errorHandler is provided; that would crash the process on an unreadable

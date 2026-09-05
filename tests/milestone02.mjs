@@ -79,6 +79,34 @@ export async function runMilestoneTwoTests() {
     const result = await analyzeItem(makeInvalidPdfItem(), { signal });
     assert.equal(hasFinding(result, 'pdf-invalid'), true, 'Invalid PDF handled gracefully');
   }
+  // --- PDF with valid header but broken structure is flagged, not silent -----
+  {
+    const pdfBytes = new TextEncoder().encode('%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF');
+    const file = new File([pdfBytes], 'broken-structure.pdf', { type: 'application/pdf', lastModified: 1_700_000_000_000 });
+    const item = { kind: 'file', name: 'broken-structure.pdf', path: 'broken-structure.pdf', size: file.size, lastModified: file.lastModified, mimeType: 'application/pdf', file };
+    const result = await analyzeItem(item, { signal });
+    assert.equal(result.analyzerId, 'pdf', 'routed to pdf analyzer');
+    assert.equal(hasFinding(result, 'pdf-structure-warning'), true, 'broken PDF structure is reported, not silent');
+    assert.ok(result.evidence.some((e) => e.id === 'pdf-structure-warning'), 'structure warning has evidence');
+  }
+  // --- Malformed / empty OOXML packages fail gracefully (never crash) -------
+  {
+    const cases = [
+      ['empty.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'docx'],
+      ['empty.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation', 'pptx'],
+      ['empty.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'xlsx'],
+      ['garbage.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'docx']
+    ];
+    for (const [name, mime, analyzerId] of cases) {
+      const bytes = name.startsWith('empty') ? new Uint8Array(0) : Uint8Array.from([1, 2, 3, 4, 5, 0xff, 0xfe, 0xab]);
+      const file = new File([bytes], name, { type: mime, lastModified: 1_700_000_000_000 });
+      const item = { kind: 'file', name, path: name, size: file.size, lastModified: file.lastModified, mimeType: mime, file };
+      const result = await analyzeItem(item, { signal });
+      assert.equal(result.analyzerId, analyzerId, `${name} routed to ${analyzerId} analyzer`);
+      assert.ok(result.unusual.some((f) => f.id === `${analyzerId}-invalid`), `${name} reports a malformed-package finding`);
+      assert.ok(result.evidence.some((e) => e.id === `${analyzerId}-error`), `${name} explains the failure in evidence`);
+    }
+  }
   // --- DOCX ---
   {
     const result = await analyzeItem(await makeDocxItem(), { signal });
@@ -404,6 +432,8 @@ export async function runMilestoneTwoTests() {
 
   console.log('Milestone 02 analyzer tests passed.');
 }
+
+
 
 
 

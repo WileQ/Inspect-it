@@ -123,6 +123,13 @@ export async function runProductionTests() {
     const ocrSource = read('src/shared/ocr.ts');
     assert.ok(ocrSource.includes('langPath'), 'OCR uses a local language path');
     assert.ok(!ocrSource.includes('jsdelivr') && !ocrSource.includes('tessdata.projectnaptha'), 'OCR never fetches language data from a CDN');
+    // Desktop OCR must route through the main-process bridge and the renderer
+    // must never use a variable-specifier dynamic import of tesseract.js (Vite
+    // cannot analyze that pattern). Literal imports are allowed.
+    assert.ok(!ocrSource.includes('@vite-ignore'), 'no @vite-ignore on OCR imports');
+    assert.ok(!/import\(\s*TESSERACT_MODULE/.test(ocrSource), 'no variable-specifier tesseract import');
+    assert.ok(ocrSource.includes("import('tesseract.js')"), 'OCR imports use a literal, Vite-analyzable specifier');
+    assert.ok(ocrSource.includes('desktopBridge()') && ocrSource.includes('inspectItDesktop'), 'desktop OCR bridge is the renderer path');
   }
 
   // --- Content Security Policy ----------------------------------------------

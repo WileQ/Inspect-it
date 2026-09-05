@@ -22,6 +22,7 @@ import { diagnosePdfImageStreams, extractPdfJpegs, extractPdfPageImages } from '
 import {
   makeCorruptScannedPdfItem,
   makeJpegScannedPdfItem,
+  makeMultiPageScannedPdfItem,
   makeOcrTextItem,
   makeScannedPdfItem
 } from './fixtures.mjs';
@@ -182,6 +183,42 @@ export async function runMilestoneSixTests() {
     assert.equal(hasFinding(result, 'pdf-ocr-unreadable'), true, 'OCR failure is reported honestly (degraded, not silent)');
     const recovered = result.unusual.find((finding) => finding.id === 'pdf-ocr-text-recovered');
     assert.equal(recovered, undefined, 'no "text recovered" claim for a corrupt image');
+  }
+
+  // --- Multi-page scanned PDF: per-page OCR + page association preserved -----
+  {
+    const result = await analyzeItem(await makeMultiPageScannedPdfItem(3), { signal });
+    assert.equal(hasEvidence(result, 'pdf-ocr-text'), true, 'multi-page scanned PDF has OCR text evidence');
+    const ocr = result.evidence.find((entry) => entry.id === 'pdf-ocr-text');
+    const upper = (ocr?.value ?? '').toUpperCase();
+    assert.ok(upper.includes('HELLO'), 'multi-page OCR recovered HELLO');
+    const section = result.sections.find((s) => s.id === 'pdf-ocr');
+    assert.ok(section, 'OCR section present');
+    const pages = section.items.filter((i) => /^Page \d+$/.test(i.label));
+    assert.equal(pages.length, 3, 'per-page OCR rows for all 3 pages');
+    for (const page of pages) {
+      assert.ok(page.value.toUpperCase().includes('HELLO'), `page ${page.label} carries OCR text`);
+    }
+    assert.equal(hasFinding(result, 'pdf-ocr-text-recovered'), true, 'recovered-text finding present');
+    const density = result.evidence.find((e) => e.id === 'pdf-text-density');
+    assert.ok(density && Number(density.value.replace(' words per page', '')) > 0, 'text density recalculated after OCR');
+  }
+
+  // --- Desktop bridge makes OCR available even if the renderer copy cannot load
+  {
+    const fakeRun = async () => ({ ok: true, text: 'BRIDGE OCR TEXT', confidence: 92, words: [] });
+    const prev = globalThis.window;
+    globalThis.window = { inspectItDesktop: { ocr: { run: fakeRun } } };
+    try {
+      assert.equal(await isOcrAvailable(), true, 'OCR available when the desktop bridge exists');
+      const outcome = await ocrImage(new Uint8Array([1, 2, 3]));
+      assert.equal(outcome.available, true, 'bridge OCR outcome available');
+      assert.equal(outcome.text, 'BRIDGE OCR TEXT', 'ocrImage routes to the desktop bridge');
+      assert.ok(outcome.provider.includes('desktop'), 'desktop provider label used');
+    } finally {
+      if (prev === undefined) delete globalThis.window;
+      else globalThis.window = prev;
+    }
   }
 
   console.log('Milestone 06 OCR tests passed.');

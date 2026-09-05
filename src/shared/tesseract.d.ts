@@ -10,7 +10,7 @@ declare module 'tesseract.js' {
     };
   }
   export interface TesseractWorker {
-    recognize(image: Blob): Promise<TesseractResult>;
+    recognize(image: Blob | Buffer | Uint8Array | ArrayBuffer | string): Promise<TesseractResult>;
     terminate(): Promise<void>;
   }
   export function createWorker(lang?: string, oem?: number, options?: unknown): Promise<TesseractWorker>;

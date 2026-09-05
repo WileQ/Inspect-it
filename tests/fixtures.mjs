@@ -330,6 +330,55 @@ export function makeCorruptScannedPdfItem() {
   return buildImagePdfItem(garbage, 64, 64, 'corrupt-scan.pdf', '/DCTDecode', garbage);
 }
 
+/**
+ * A multi-page scanned PDF where every page is one uncompressed PNG image.
+ * Mirrors a real multi-page image-only scan so the OCR pipeline can be tested
+ * end-to-end with page association preserved.
+ */
+export function makeMultiPageScannedPdfItem(pageCount = 3, name = 'multi-scan.pdf') {
+  const enc = new TextEncoder();
+  const bytes = (value) => enc.encode(value);
+  const pages = [];
+  for (let page = 1; page <= pageCount; page += 1) {
+    const { bytes: png, width, height } = renderTextPng('HELLO WORLD', { scale: 10, pad: 24 });
+    pages.push({ png, width, height });
+  }
+  // Object layout: 1 catalog, 2 pages tree, then per page: page obj, image obj, content obj.
+  const objectBodies = [];
+  objectBodies.push(bytes('<< /Type /Catalog /Pages 2 0 R >>'));
+  const kids = pages.map((_, i) => `${3 + i * 3} 0 R`).join(' ');
+  objectBodies.push(bytes(`<< /Type /Pages /Kids [${kids}] /Count ${pages.length} >>`));
+  pages.forEach((page, i) => {
+    const pageNum = i + 1;
+    const pageObjNum = 3 + i * 3;      // page object
+    const imageObjNum = pageObjNum + 1; // image XObject
+    const contentObjNum = pageObjNum + 2; // content stream
+    objectBodies.push(
+      bytes(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${page.width} ${page.height}] /Resources << /XObject << /Im1 ${imageObjNum} 0 R >> >> /Contents ${contentObjNum} 0 R >>`)
+    );
+    // Raw (uncompressed) PNG image stream so the deterministic OCR path never
+    // depends on zlib decompression.
+    objectBodies.push(concatBytes([bytes(`<< /Type /XObject /Subtype /Image /Width ${page.width} /Height ${page.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length ${page.png.length} >>\nstream\n`), page.png, bytes('\nendstream')]));
+    const content = `q ${page.width} 0 0 ${page.height} 0 0 cm /Im1 Do Q`;
+    objectBodies.push(bytes(`<< /Length ${content.length} >>\nstream\n${content}\nendstream`));
+  });
+  const parts = [bytes('%PDF-1.4\n')];
+  const offsets = [0];
+  objectBodies.forEach((body, index) => {
+    offsets.push(parts.reduce((acc, part) => acc + part.length, 0));
+    parts.push(concatBytes([bytes(`${index + 1} 0 obj\n`), body, bytes('\nendobj\n')]));
+  });
+  const xrefStart = parts.reduce((acc, part) => acc + part.length, 0);
+  let xref = `xref\n0 ${objectBodies.length + 1}\n`;
+  xref += '0000000000 65535 f \n';
+  for (let index = 1; index <= objectBodies.length; index += 1) {
+    xref += offsets[index].toString().padStart(10, '0') + ' 00000 n \n';
+  }
+  xref += `trailer\n<< /Size ${objectBodies.length + 1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
+  parts.push(bytes(xref));
+  return toItem(name, concatBytes(parts), 'application/pdf');
+}
+
 export function makeInvalidPdfItem() {
   const bytes = new Uint8Array(512);
   for (let index = 0; index < bytes.length; index += 1) bytes[index] = (index * 13) % 256;
