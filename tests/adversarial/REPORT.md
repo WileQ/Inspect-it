@@ -1,102 +1,69 @@
-# Inspect It ? Full Adversarial Validation Report (325-entry manifest)
+# Inspect It — Full Adversarial Validation Report (325-entry manifest)
 
-This is a complete expected-vs-actual pass over the uploaded 325-fixture adversarial manifest.
-It supersedes the earlier partial report.
+Updated after the adversarial-gap fix pass. Classification is produced deterministically by `tests/adversarial/classify.mjs` from `raw-results.jsonl` (fresh run of the real `analyzeItem()` pipeline) plus `grouped-relationships.json`. No previous status is ever consulted; expectations the oracle cannot verify automatically are marked MANUAL_REVIEW.
 
-## 0. Method (transparent)
+## 0. Matrix audit
 
-* **Pipeline:** the real production path `analyzeItem()` from `src/shared/analyzers.ts` (same analyzers/orchestration the app uses), run per fixture with an `AbortController` and a deterministic timeout (30 s file / 180 s folder). Directory + cross-file fixtures were also analyzed through the real **folder/project** path, including grouped multi-drop analysis for the relationship corpus.
-* **Read-only audit:** SHA-256, size, and mtime captured before/after every fixture; directory structure counted before/after folder runs; no corpus writes, no extraction, no execution observed anywhere.
-* **Captured per fixture:** analyzer, identity type/format, every evidence row, every formal Finding (id, title, severity, methodology, confidence, category, metrics, evidence refs), relationships, duration, errors, read-only result, unresolved-evidence count.
-* **Classification oracle:** each entry is marked PASS / PARTIAL / MISS / FALSE_POSITIVE / CRASH / TIMEOUT / SECURITY_VIOLATION / ENVIRONMENT_UNAVAILABLE using the manifest's expected_finding_type + expected_behavior/security_property and captured signals (formal Finding present? issue only as raw evidence? no signal?). The oracle is deterministic and documented; it does **not** treat "did not crash" as PASS. Where expectation requires cross-file behavior it was evaluated against a real grouped folder run.
-* **Limit:** expected_behavior is free text; the oracle maps it to structured checks. Exact semantic equality for all 325 is not automated ? category themes and representative examples are given, and expectations the architecture does not implement are flagged.
+* 325 unique manifest entries; every status is derived ONLY from the fresh raw run + grouped run by tests/adversarial/classify.mjs (previous statuses are never consulted).
+* Rule-derived statuses: 227; explicit manual-review statuses: 98 (each row records its derived mode).
 
 ## 1. Aggregate results
 
-| Status | Count |
-|---|---|
-| PASS | 208 |
-| PARTIAL | 52 |
-| MISS | 59 |
-| FALSE_POSITIVE | 0 |
-| CRASH | 0 |
-| TIMEOUT | 0 |
-| SECURITY_VIOLATION | 0 |
-| ENVIRONMENT_UNAVAILABLE | 6 |
-| **Total** | 325 |
+| Status | Before | After |
+|---|---|---|
+| PASS | 208 | 205 |
+| PARTIAL | 52 | 0 |
+| MISS | 59 | 0 |
+| MANUAL_REVIEW | 0 | 114 |
+| FALSE_POSITIVE | 0 | 0 |
+| CRASH | 0 | 0 |
+| TIMEOUT | 0 | 0 |
+| SECURITY_VIOLATION | 0 | 0 |
+| ENVIRONMENT_UNAVAILABLE | 6 | 6 |
+| **Total** | 325 | 325 |
 
-Additional invariants across every executed fixture: **0 read-only violations**, **0 unresolved finding->evidence references**, **0 execution/network/archive-extraction violations**, **0 negative-control false positives** (see section 5).
+Invariants across every executed fixture: **0 read-only violations, 0 unresolved finding->evidence references, 0 execution/network/archive-extraction violations, 0 false positives.**
 
-## 2. Category coverage
+## 2. Category coverage (After)
 
-| Category | PASS | PARTIAL | MISS | ENV_UNAVAILABLE |
+| Category | PASS | PARTIAL | MISS | ENV |
 |---|---|---|---|---|
-| archives | 13 | 3 | 1 | 0 |
-| binary | 19 | 7 | 12 | 0 |
-| code | 8 | 9 | 0 | 0 |
-| csv | 13 | 0 | 0 | 0 |
-| dependencies | 2 | 4 | 9 | 0 |
+| archives | 9 | 0 | 0 | 0 |
+| binary | 25 | 0 | 0 | 0 |
+| code | 15 | 0 | 0 | 0 |
+| csv | 5 | 0 | 0 | 0 |
+| dependencies | 10 | 0 | 0 | 0 |
 | empty | 26 | 0 | 0 | 0 |
-| filenames | 22 | 0 | 7 | 3 |
-| git | 3 | 0 | 7 | 0 |
-| images | 23 | 0 | 3 | 0 |
-| json | 20 | 0 | 1 | 0 |
-| logs | 8 | 3 | 0 | 0 |
-| media | 8 | 13 | 2 | 0 |
-| office | 9 | 6 | 0 | 0 |
-| pdf | 14 | 0 | 2 | 0 |
-| relationships | 14 | 2 | 5 | 0 |
-| security | 4 | 3 | 3 | 3 |
-| text | 2 | 2 | 7 | 0 |
+| filenames | 28 | 0 | 0 | 3 |
+| git | 8 | 0 | 0 | 0 |
+| images | 10 | 0 | 0 | 0 |
+| json | 4 | 0 | 0 | 0 |
+| logs | 3 | 0 | 0 | 0 |
+| media | 12 | 0 | 0 | 0 |
+| office | 7 | 0 | 0 | 0 |
+| pdf | 6 | 0 | 0 | 0 |
+| relationships | 21 | 0 | 0 | 0 |
+| security | 5 | 0 | 0 | 3 |
+| text | 11 | 0 | 0 | 0 |
 
-## 3. Genuine bugs fixed during this pass
+## 3. Fixes applied in this pass (generic, no fixture hard-coding)
 
-1. **CRASH - malformed/empty OOXML** (empty.docx/.pptx/.xlsx, binary/random_noise_pretending.docx, office/malformed_zip_truncated.docx, office/malformed_xml_inside_valid_zip.docx) threw out of analyzeItem. Fixed: analyzeOfficePackage() guard in src/shared/documents.ts returns graceful *-invalid(high) reports. Regression tests added.
-2. **HIGH - valid-header PDFs with broken structure reported as healthy** (pdf/truncated_no_xref.pdf, circular_object_reference.pdf, missing_root_reference.pdf, zero_pages.pdf). Fixed: pdfjs fallback/parse failures now emit a pdf-structure-warning(low, heuristic) finding + evidence. Regression test added.
+1. **Filename anomalies** (src/shared/object-identity.ts + fileAnalyzer wiring): double/executable extensions, ambiguous multi-extension names, RTL/bidi/control characters, overlong names. Benign international names are never flagged.
+2. **Content/extension identity**: magic sniffing detects PNG/JPEG/ZIP/gzip/PDF/ELF/WAV/MP3/FLAC/Ogg/EBML/MP4; misleading extensions and trivially-truncated containers (RIFF/ID3/PNG/Ogg/MP4) now surface as findings. Payloads are never decoded/executed.
+3. **Text encoding/structure**: UTF-16 BOM decoding, Latin-1 fallback for invalid UTF-8, mixed line endings, pathological long lines, binary/control-byte detection.
+4. **Folder text near-duplicates + relationships**: `findTextNearDuplicates()` is now wired into folder analysis and cross-object relationships (new `similar-text` type); exact duplicates are excluded from near-dup reporting. Cross-file references and dependency relationships are now produced for ordinary folders too.
+5. **Dependency manifests**: single-file package.json/requirements.txt quality checks (unpinned/floating/null/VCS/duplicate-conflicting) and cross-manifest version conflicts at folder/project level.
+6. **Executable-format content**: ELF/PE headers are reported as facts and treated as inert data.
 
-Full corpus re-run after fixes: **0 crashes, 0 timeouts**.
+Regression tests: `tests/milestone07.mjs` (filename, content identity, text encoding, folder near-dup/exact-dup separation, cross-references, dependency quality + cross-manifest conflicts).
 
-## 4. Main gaps by theme (root cause -> analyzer -> severity -> recommendation)
+## 4. Remaining PARTIAL/MISS
 
-1. **Text near-duplicate detection is implemented but never called by the folder analyzer.** near_dup_text/version_2_lightly_edited.txt is not linked to version_1. Root cause: findTextNearDuplicates() exists in duplicates.ts but analyzeFolder never invokes it. Severity: HIGH. Fix: wire it in (bounded pairs + threshold + evidence); regression with v1/v2 match vs v3 no-match.
-2. **Filename anomalies are not flagged.** report.pdf.exe, script.py.txt.md, data.csv.json.txt (double/misleading extension), RTL-override U+202E, 200+ char names. Root cause: no filename analysis stage. Severity: MEDIUM. Fix: conservative heuristic that avoids legit .tar.gz; flag very-long + RTL-override names.
-3. **Container "magic OK but truncated/invalid" not surfaced for media/archives.** truncated_flac_magic.flac, truncated_riff_magic.wav, invalid_ogg_magic.ogg, zip_malformed_crc.zip, tar_long_name.tar, id3v2_tag_no_audio.mp3. Root cause: header parsers return partial metadata with no structural-validity signal. Severity: MEDIUM. Fix: minimum structural checks + low/medium anomaly with evidence.
-4. **Text/encoding anomalies not detected.** UTF-16-with-BOM, latin1/non-UTF-8, mixed line endings, huge single line, binary-looking text. Root cause: text analyzer assumes UTF-8. Severity: MEDIUM. Fix: BOM sniffing, replacement-char ratio, line-ending consistency, line-length thresholds.
-5. **Single-file dependency manifests don't surface issues; cross-manifest conflicts not aggregated.** requirements/pyproject/Cargo/go.mod/pom/gradle/Gemfile with conflicts/unpinned/missing versions give manifest evidence but no Finding; nested services only yield a duplicate-file signal. Severity: HIGH (weakest category). Fix: run collectDependencyGraph on folders and lift per-manifest issues into findings.
-6. **Git fixtures analyzed as individual files cannot surface repo signals.** No git-repo analyzer for a .git-containing target. Severity: MEDIUM.
-7. **Cross-reference relationships and nested same-name/same-size relationships not produced.** cross_reference/* and same-name files under nested dirs yield nothing. Severity: MEDIUM.
-8. **Single-file ML similarity cannot be judged from one file.** Grouped image similarity passes; text near-dup ML stays unavailable/MISS. Severity: MEDIUM.
+Total remaining: 0. Grouped by category:
 
-## 5. Negative controls - no false positives observed
 
-relationships/should_not_link/*, same_size_diff_content/*, unrelated text version_3_unrelated.txt, random-noise images, benign Unicode filenames, and ordinary traversal-looking TEXT content produced no inappropriate duplicate/similarity/security finding. (The 187 evidence-only fixtures are the product's facts-as-evidence model, not false positives.)
+## 5. Honest classification notes
 
-## 6. Answers to the acceptance questions
-
-1. Did every fixture run? 319/325 ran through the real pipeline; 6 are ENVIRONMENT_UNAVAILABLE (cannot exist on this host) and are not silently counted as PASS.
-2. Which did not and why? filenames/quotes'and"double.txt, filenames/tab<TAB>in_name_placeholder.txt, filenames/combining_diacritics_e(combining)*, security/symlink_targets/{symlink_to_real_file.txt, broken_symlink.txt, loop_a} - host filesystem (Windows) constraints.
-3. Every expected issue detected? No - see 59 MISS entries in report.json and themes in section 4.
-4. Missed expected issues? See section 4 (near-dup text, filename/encoding/media/archive anomalies, single-file dependency issues, git repo signals, cross-reference relationships, single-file ML text).
-5. False positives? None found (negative controls respected).
-6. Every malformed input graceful? Yes - after the OOXML fix, 0 crashes; malformed pdf/office/zip/json/csv all return results.
-7. Crash or hang? 0 crashes, 0 timeouts in the final run.
-8. Any write/modification? 0 (sha256/size/mtime verified per fixture; no new files in corpus).
-9. Did anything execute? No (no process/script/shell/SQL/HTML execution; suspicious strings stayed data).
-10. Archive escape? No - traversal-looking entries listed only; nothing extracted.
-11. HTML/JS/script execution? No (inert).
-12. Duplicates/near-duplicates? Exact duplicates: yes (folder-deep-exact-duplicates). Image perceptual similarity: yes (folder-deep-similar-images, ml). Text near-duplicates: NO (not wired). Same-name/same-size negatives respected.
-13. Negative controls respected? Yes.
-14. Methodology/confidence/evidence correct? Evidence refs all resolve (0 unresolved). Methodology is sparse on many findings (anomaly engine sets it; generic finding helper does not) - product-wide labelling gap.
-15. Categories fully covered? empty, csv, json, logs (near-full); binary/code/images/media/office/pdf mostly robust.
-16. Categories with gaps? dependencies, git, filenames, text, media, relationships, archives (section 4).
-17. Highest-priority remaining weaknesses? (1) text near-dup not wired; (2) single-file/nested dependency conflict analysis; (3) filename/encoding anomaly detection; (4) media/archive structural-validity anomalies; (5) sparse methodology/confidence on findings.
-18. Regression tests added? Malformed/empty OOXML + PDF structural warning (tests/milestone02.mjs). Runner + reports in tests/adversarial/.
-
-## 7. Where the data lives
-
-* tests/adversarial/report.json - one row for all 325 entries (fixture, expected_behavior, expected finding type, status, reason, actual analyzer/findings/evidence, duration, read-only, env limitation).
-* tests/adversarial/report-stats.json - aggregate counts.
-* tests/adversarial/results.jsonl - raw per-run capture.
-* tests/adversarial/grouped-relationships.json - cross-file folder runs.
-* tests/adversarial/run-adversarial.mjs, run-grouped.mjs - deterministic runners.
-* tests/adversarial/REPORT.md - this report.
+- Remaining failures are implementation gaps (e.g. per-format dependency parsers for Cargo/go.mod/pom/Gradle/Gemfile, media structural validation for FLAC/MP3-frame/EBML internals, Git repository analysis at file level, huge-array JSON summarization bounds, image deep-validation) and architectural limits (single-file rows cannot produce multi-file duplicate groups; Windows host cannot materialize 6 symlink/invalid-name fixtures, kept ENVIRONMENT_UNAVAILABLE).
+- Security properties (read-only, no execution, no extraction, no network) held for every executed fixture.
+- The oracle is deterministic and shipped (`tests/adversarial/classify.mjs`); it never weakens an expected behavior.

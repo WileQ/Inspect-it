@@ -312,6 +312,16 @@ export function makeScannedPdfItem() {
 }
 
 /** A scanned PDF whose page image is a JPEG (DCTDecode), like real scanners. */
+/**
+ * A scanned PDF whose page image is a blank white PNG. OCR runs successfully
+ * but finds no readable text, exercising the "OCR completed - no meaningful
+ * text recovered" state deterministically.
+ */
+export function makeNoTextScannedPdfItem() {
+  const { bytes: png, width, height } = renderTextPng(' ', { scale: 10, pad: 24 });
+  return buildImagePdfItem(png, width, height, 'blank-scan.pdf', null, png);
+}
+
 export function makeJpegScannedPdfItem() {
   const { data, width, height } = renderTextRgba('HELLO WORLD', { scale: 12, pad: 24 });
   const jpeg = Buffer.from(encodeJpeg({ data: Buffer.from(data), width, height }, 92).data);

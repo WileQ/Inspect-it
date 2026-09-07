@@ -43,7 +43,7 @@ function buildResult(file: InspectionFile, analyzerId: string, analyzerName: str
   };
 }
 
-export async function analyzePdfFile(file: InspectionFile, options: { signal: AbortSignal; bytes?: Uint8Array }): Promise<AnalysisResult> {
+export async function analyzePdfFile(file: InspectionFile, options: { signal: AbortSignal; bytes?: Uint8Array; ocrAvailableOverride?: boolean }): Promise<AnalysisResult> {
   ensureNotAborted(options.signal);
   const bytes = options.bytes ?? await readBytes(file, 64 * 1024 * 1024);
   const headerText = new TextDecoder('latin1', { fatal: false }).decode(bytes.slice(0, 8 * 1024 * 1024));
@@ -139,7 +139,7 @@ export async function analyzePdfFile(file: InspectionFile, options: { signal: Ab
     {
       id: 'pdf-facts',
       title: 'Facts',
-      items: evidenceList
+      items: [...evidenceList]
     },
     {
       id: 'pdf-metadata',
@@ -155,10 +155,12 @@ export async function analyzePdfFile(file: InspectionFile, options: { signal: Ab
       id: 'pdf-text',
       title: 'Extracted text',
       items: perPage.length
-        ? perPage.slice(0, 8).map((page, index) => evidence(`pdf-page-${index}`, `Page ${index + 1}`, page.replace(/\s+/g, ' ').trim().slice(0, 400) || '(no text)'))
+        ? perPage.slice(0, 8).map((page, index) => evidence(`pdf-page-${index}`, `Page ${index + 1}`, page.replace(/\s+/g, ' ').trim().slice(0, 400) || 'No native text'))
         : textSnippets.length
           ? [evidence('pdf-text-preview', 'Text preview', extraction.text.replace(/\s+/g, ' ').trim().slice(0, 400) || '(no text)')]
-          : [evidence('pdf-no-text', 'Extracted text', 'No extractable text found')]
+          : pageCount > 0
+            ? Array.from({ length: Math.min(pageCount, 8) }, (_, index) => evidence(`pdf-page-${index}`, `Page ${index + 1}`, 'No native text'))
+            : [evidence('pdf-no-text', 'Extracted text', 'No extractable text found')]
     },
     {
       id: 'pdf-links',
@@ -189,59 +191,156 @@ export async function analyzePdfFile(file: InspectionFile, options: { signal: Ab
   if (embeddedFiles > 0) {
     evidenceList.push(evidence('pdf-embedded-count', 'Embedded file attachments', formatNumber(embeddedFiles)));
   }
-  const ocrAvailable = await isOcrAvailable();
-  // Local OCR for image-only ("scanned") PDFs: extract embedded page images
-  // (JPEG DCTDecode and PNG FlateDecode) and run the same OCR pipeline used
-  // for images. Bounded to the first 12 page images and 60 pages so a huge
-  // scan cannot stall the inspection.
+  // --------------------------------------------------------------------------
+  // OCR (image-only / "scanned" PDFs only)
+  // --------------------------------------------------------------------------
+  // The engine runs in the Electron main process on desktop (or the local
+  // Node/browser engine elsewhere) and never fabricates text. OCR is reported
+  // through one of four explicit states instead of duplicated messages:
+  //   native       - a normal text PDF; OCR is irrelevant
+  //   success      - scanned PDF; OCR recovered readable text
+  //   no-text      - OCR ran but recovered no meaningful text
+  //   unavailable  - scanned PDF; the OCR engine is not available
+  //   failed       - OCR ran but the page images could not be decoded
+  //   not-run      - scanned PDF; OCR skipped (page limit / no page images)
+  const ocrAvailable = options.ocrAvailableOverride === undefined ? await isOcrAvailable() : options.ocrAvailableOverride;
   const ocrPages: Array<{ page: number; text: string; confidence?: number }> = [];
   let ocrImageCount = 0;
+  let ocrRan = false;
+  let ocrEngineRuns = 0;
+  let ocrFailures = 0;
+  let ocrLastError = '';
   if (scannedLikely && ocrAvailable && pageCount > 0 && pageCount <= 60) {
     const pageImages = extractPdfPageImages(bytes, 12);
     ocrImageCount = pageImages.length;
     for (let index = 0; index < pageImages.length; index += 1) {
       ensureNotAborted(options.signal);
       const outcome = await ocrImage(pageImages[index].bytes);
-      if (outcome.available && outcome.text.trim()) {
-        ocrPages.push({ page: index + 1, text: outcome.text.trim(), confidence: outcome.confidence });
+      ocrRan = true;
+      if (outcome.available) {
+        ocrEngineRuns += 1;
+        const text = outcome.text.trim();
+        if (text) ocrPages.push({ page: index + 1, text, confidence: outcome.confidence });
+      } else {
+        ocrFailures += 1;
+        ocrLastError = outcome.message ? String(outcome.message).slice(0, 300) : ocrLastError;
       }
     }
   }
-  // OCR-recovered words are folded into density/empty-page signals so a scanned
-  // PDF is not reported as "no text" after OCR already recovered readable text.
+  let ocrState: 'native' | 'success' | 'no-text' | 'unavailable' | 'failed' | 'not-run' = 'native';
+  if (scannedLikely) {
+    if (!ocrAvailable) ocrState = 'unavailable';
+    else if (!ocrRan) ocrState = 'not-run';
+    else if (ocrPages.length > 0) ocrState = 'success';
+    else if (ocrEngineRuns > 0) ocrState = 'no-text';
+    else ocrState = 'failed';
+  }
   const ocrWordTotal = ocrPages.reduce((sum, page) => sum + tokenizeWords(page.text).length, 0);
-  const combinedWordCount = wordCount + ocrWordTotal;
-  const textDensity = pageCount ? combinedWordCount / pageCount : 0;
+  const textDensity = pageCount ? (wordCount + ocrWordTotal) / pageCount : 0;
   const emptyPageRatio = pageCount ? blankPages / pageCount : 0;
+  const ocrConfidences = ocrPages.map((page) => page.confidence).filter((value): value is number => typeof value === 'number');
+  const ocrAvgConfidence = ocrConfidences.length ? ocrConfidences.reduce((sum, value) => sum + value, 0) / ocrConfidences.length : null;
   const repeatedCounts = new Map<string, number>();
   for (const snippet of textSnippets) {
     repeatedCounts.set(snippet, (repeatedCounts.get(snippet) ?? 0) + 1);
   }
   const repeatedPattern = [...repeatedCounts.entries()].find(([, count]) => count > 1);
+  const repeatedValue = repeatedPattern ? `"${repeatedPattern[0].slice(0, 80)}" appears ${repeatedPattern[1]} times` : '';
   const pdfDateMatch = metadata?.created?.match(/D:(\d{4})(\d{2})(\d{2})/);
   let futureDate = false;
   if (pdfDateMatch) {
     const created = new Date(Date.UTC(Number(pdfDateMatch[1]), Number(pdfDateMatch[2]) - 1, Number(pdfDateMatch[3])));
     futureDate = created.getTime() > Date.now() + 24 * 60 * 60 * 1000;
   }
+  // Combined density is labeled explicitly so it is never confused with the
+  // native "Words" fact above.
+  const densityLabel = ocrState === 'success' ? 'Text density (including OCR)' : 'Text density';
   evidenceList.push(
-    evidence('pdf-text-density', 'Text density', pageCount ? `${textDensity.toFixed(2)} words per page` : 'n/a'),
-    evidence('pdf-empty-page-ratio', 'Pages without text', pageCount ? percent(emptyPageRatio) : 'n/a')
+    evidence('pdf-text-density', densityLabel, pageCount ? `${textDensity.toFixed(2)} words per page` : 'n/a'),
+    evidence('pdf-empty-page-ratio', 'Pages without text', pageCount ? percent(emptyPageRatio) : 'n/a'),
+    evidence('pdf-ocr-available', 'Local OCR', ocrAvailable ? 'Available' : 'Not installed (tesseract.js)')
   );
   if (repeatedPattern) {
-    evidenceList.push(evidence('pdf-repeated', 'Repeated text pattern', `"${repeatedPattern[0].slice(0, 80)}" appears ${repeatedPattern[1]} times`));
+    evidenceList.push(evidence('pdf-repeated', 'Repeated text pattern', repeatedValue));
   }
-  evidenceList.push(evidence('pdf-ocr-available', 'Local OCR', ocrAvailable ? 'Available' : 'Not installed (tesseract.js)'));
-  sections.push({
-    id: 'pdf-deep',
-    title: 'Deep analysis',
-    items: [
-      evidence('pdf-text-density', 'Text density', pageCount ? `${textDensity.toFixed(2)} words per page` : 'n/a'),
-      evidence('pdf-empty-page-ratio', 'Pages without text', pageCount ? percent(emptyPageRatio) : 'n/a'),
-      repeatedPattern ? evidence('pdf-repeated', 'Repeated text pattern', `"${repeatedPattern[0].slice(0, 80)}" appears ${repeatedPattern[1]} times`) : evidence('pdf-repeated-none', 'Repeated text pattern', 'None detected'),
-      evidence('pdf-ocr-available', 'Local OCR', ocrAvailable ? 'Available' : 'Not installed (tesseract.js)')
-    ]
-  });
+  // Deep analysis summarizes OCR instead of duplicating the page text.
+  const deepItems: Evidence[] = [
+    evidence('pdf-text-density', densityLabel, pageCount ? `${textDensity.toFixed(2)} words per page` : 'n/a')
+  ];
+  if (ocrState !== 'success') {
+    deepItems.push(evidence('pdf-empty-page-ratio', 'Pages without text', pageCount ? percent(emptyPageRatio) : 'n/a'));
+  }
+  if (repeatedPattern) {
+    deepItems.push(evidence('pdf-repeated', 'Repeated text pattern', repeatedValue));
+  }
+  if (ocrState === 'success') {
+    deepItems.push(
+      evidence('pdf-native-words', 'Native text', wordCount > 0 ? `${formatNumber(wordCount)} words` : '0 words'),
+      evidence('pdf-ocr-summary', 'OCR', `Recovered ${formatNumber(ocrWordTotal)} words from ${formatNumber(ocrPages.length)} scanned page${ocrPages.length === 1 ? '' : 's'}.`)
+    );
+  } else if (ocrState === 'native' && ocrAvailable) {
+    // A single small capability row for ordinary text PDFs - not an OCR section.
+    deepItems.push(evidence('pdf-ocr-available', 'Local OCR', 'Available'));
+  }
+  sections.push({ id: 'pdf-deep', title: 'Deep analysis', items: deepItems });
+
+  // OCR summary + expandable page-text sections (only for scanned PDFs where
+  // OCR is relevant). They are inserted right after "Extracted text" and before
+  // Relationships, so the report reads: Facts, Structure, Extracted text, OCR,
+  // OCR text, Relationships, Deep analysis.
+  const ocrStatusItems: Evidence[] = [];
+  if (ocrState === 'success') {
+    ocrStatusItems.push(
+      evidence('pdf-ocr-status', 'Status', 'Available'),
+      evidence('pdf-ocr-pages', 'Pages processed', formatNumber(ocrImageCount)),
+      evidence('pdf-ocr-words', 'Words recovered', formatNumber(ocrWordTotal))
+    );
+    if (ocrAvgConfidence !== null) {
+      ocrStatusItems.push(evidence('pdf-ocr-confidence', 'Average confidence', `${Math.round(ocrAvgConfidence)}%`));
+    }
+    if (ocrPages.length < ocrImageCount) {
+      ocrStatusItems.push(evidence('pdf-ocr-recovered-pages', 'Pages with recovered text', formatNumber(ocrPages.length)));
+    }
+  } else if (ocrState === 'no-text') {
+    ocrStatusItems.push(
+      evidence('pdf-ocr-status', 'Status', 'OCR completed \u2014 no meaningful text recovered'),
+      evidence('pdf-ocr-pages', 'Pages processed', formatNumber(ocrImageCount))
+    );
+  } else if (ocrState === 'failed') {
+    ocrStatusItems.push(
+      evidence('pdf-ocr-status', 'Status', 'OCR failed'),
+      evidence('pdf-ocr-pages', 'Pages processed', formatNumber(ocrImageCount))
+    );
+  } else if (ocrState === 'unavailable') {
+    ocrStatusItems.push(
+      evidence('pdf-ocr-status', 'Status', 'OCR unavailable'),
+      evidence('pdf-ocr-reason', 'Reason', 'This PDF contains image-based pages and no native text was extracted.')
+    );
+  } else if (ocrState === 'not-run') {
+    ocrStatusItems.push(
+      evidence('pdf-ocr-status', 'Status', 'OCR not run'),
+      evidence('pdf-ocr-reason', 'Reason', pageCount > 60 ? 'OCR is limited to the first 60 pages of a scanned document.' : 'No embedded page images could be extracted for OCR.')
+    );
+  }
+  for (const row of ocrStatusItems) evidenceList.push(row);
+  const ocrTextItems: Evidence[] = ocrPages.slice(0, 12).map((entry, index) =>
+    evidence(`pdf-ocr-page-${index}`, `Page ${entry.page}`, entry.text.slice(0, 6000))
+  );
+  for (const row of ocrTextItems) evidenceList.push(row);
+  if (ocrStatusItems.length) {
+    const textSectionIndex = sections.findIndex((section) => section.id === 'pdf-text');
+    const insertAt = textSectionIndex >= 0 ? textSectionIndex + 1 : sections.length;
+    sections.splice(insertAt, 0, { id: 'pdf-ocr', title: 'OCR', items: ocrStatusItems });
+    if (ocrTextItems.length) {
+      sections.splice(insertAt + 1, 0, {
+        id: 'pdf-ocr-text',
+        title: `OCR text \u00b7 ${formatNumber(ocrPages.length)} page${ocrPages.length === 1 ? '' : 's'} \u00b7 ${formatNumber(ocrWordTotal)} words`,
+        items: ocrTextItems,
+        collapsed: true
+      });
+    }
+  }
+
   const unusual: Finding[] = [];
   if (structuralWarning) {
     unusual.push({
@@ -295,16 +394,13 @@ export async function analyzePdfFile(file: InspectionFile, options: { signal: Ab
     unusual.push({
       id: 'pdf-rotation-variation',
       title: 'Mixed page rotation',
-      summary: `Pages have different rotations (“${[...rotations].map((r) => `${r}°`).join(', ')}”), which can indicate a careless scan or export.`,
+      summary: `Pages have different rotations (\u201c${[...rotations].map((r) => `${r}\u00b0`).join(', ')}\u201d), which can indicate a careless scan or export.`,
       severity: 'low',
       evidence: ['pdf-rotation'],
       methodology: 'fact',
       confidence: 'high',
       category: 'structure'
     });
-  }
-  if (scannedLikely && ocrPages.length === 0) {
-    unusual.push(finding('pdf-ocr', 'OCR opportunity', 'The PDF appears to be image-only or nearly image-only; OCR has not recovered text yet.', 'medium', ['pdf-text-snippets', 'pdf-images']));
   }
   if (metadata?.title && metadata?.author && metadata.title === metadata.author) {
     unusual.push(finding('pdf-meta-same', 'Repeated metadata', 'Title and author are identical, which can be unusual for exported documents.', 'low', ['pdf-title', 'pdf-author']));
@@ -319,7 +415,7 @@ export async function analyzePdfFile(file: InspectionFile, options: { signal: Ab
     unusual.push({
       id: 'pdf-low-text-density',
       title: 'Low text density',
-      summary: `Only ${formatNumber(wordCount)} words across ${formatNumber(pageCount)} pages (${percent(textDensity)} per page).`,
+      summary: `Only ${formatNumber(wordCount)} words across ${formatNumber(pageCount)} pages (${textDensity.toFixed(2)} words per page).`,
       severity: 'medium',
       evidence: ['pdf-text-density', 'pdf-pages'],
       methodology: 'anomaly',
@@ -352,57 +448,43 @@ export async function analyzePdfFile(file: InspectionFile, options: { signal: Ab
       category: 'metadata'
     });
   }
-  if (ocrImageCount > 0 && ocrPages.length === 0) {
-    // OCR ran but could not decode any embedded page image. Report the degraded
-    // state honestly instead of fabricating text.
+  // A single OCR finding per outcome - never several variations of the same fact.
+  if (ocrState === 'success') {
+    unusual.push({
+      id: 'pdf-ocr-text-recovered',
+      title: 'Scanned text recovered via OCR',
+      summary: `OCR recovered text from ${formatNumber(ocrPages.length)} page image${ocrPages.length === 1 ? '' : 's'} locally (${formatNumber(ocrWordTotal)} words).`,
+      severity: 'info',
+      evidence: ['pdf-ocr-words', 'pdf-images'],
+      methodology: 'ml',
+      confidence: 'medium',
+      category: 'structure',
+      metrics: { ocrWords: ocrWordTotal, ocrPages: ocrPages.length }
+    });
+  } else if (ocrState === 'failed') {
     unusual.push({
       id: 'pdf-ocr-unreadable',
-      title: 'OCR could not read page images',
-      summary: `OCR was attempted on ${formatNumber(ocrImageCount)} embedded page image(s) but none could be decoded locally; no text was fabricated.`,
+      title: 'OCR could not read scanned pages',
+      summary: `OCR failed on ${formatNumber(ocrImageCount)} scanned page image${ocrImageCount === 1 ? '' : 's'}${ocrLastError ? ` (${ocrLastError})` : ''}; no text was recovered or fabricated.`,
       severity: 'low',
-      evidence: ['pdf-images'],
+      evidence: ['pdf-ocr-status', 'pdf-images'],
       methodology: 'fact',
       confidence: 'high',
       category: 'structure'
     });
   }
-  if (ocrPages.length) {
-    const combinedOcr = ocrPages.map((entry) => entry.text).join(' ');
-    evidenceList.push(evidence('pdf-ocr-text', 'OCR text', combinedOcr.slice(0, 300)));
-    evidenceList.push(evidence('pdf-ocr-words', 'OCR words', formatNumber(ocrWordTotal)));
-    evidenceList.push(evidence('pdf-words-with-ocr', 'Words (incl. OCR)', formatNumber(combinedWordCount)));
-    sections.push({
-      id: 'pdf-ocr',
-      title: 'OCR (scanned pages)',
-      items: ocrPages.slice(0, 8).map((entry, index) =>
-        evidence(
-          `pdf-ocr-page-${index}`,
-          `Page ${entry.page}`,
-          `${entry.text.slice(0, 300)}${entry.confidence !== undefined ? ` (${entry.confidence.toFixed(0)}% confidence)` : ''}`
-        )
-      )
-    });
-    unusual.push({
-      id: 'pdf-ocr-text-recovered',
-      title: 'Scanned text recovered via OCR',
-      summary: `OCR recovered text from ${formatNumber(ocrPages.length)} page image(s) locally (${formatNumber(tokenizeWords(combinedOcr).length)} words).`,
-      severity: 'info',
-      evidence: ['pdf-ocr-text', 'pdf-images'],
-      methodology: 'ml',
-      confidence: 'medium',
-      category: 'structure'
-    });
-  }
   const recommendations: Finding[] = [];
-  if (scannedLikely && ocrPages.length === 0) {
-    recommendations.push(finding('pdf-ocr-reco', 'Consider OCR', 'Text extraction appears limited; OCR may recover more content.', 'low', ['pdf-text-snippets']));
+  if (ocrState === 'unavailable') {
+    recommendations.push(finding('pdf-ocr-enable', 'Enable local OCR', 'Enable local OCR to recover text from scanned pages.', 'low', ['pdf-ocr-status', 'pdf-images']));
   }
   const limitations: string[] = [];
   if (file.size > 64 * 1024 * 1024) {
     limitations.push('PDF exceeds the 64 MB inspection limit; analysis is based on the first 64 MB.');
   }
   limitations.push(...extractionWarnings);
-  if (scannedLikely) limitations.push('OCR opportunity likely');
+  if (ocrState === 'success') {
+    limitations.push('Native PDF text extraction returned no text; recovered text comes from local OCR.');
+  }
   if (!limitations.length) limitations.push('Read-only metadata/text inspection only');
   return buildResult(
     file,
@@ -951,7 +1033,7 @@ async function analyzeOfficePackage(
   }
 }
 
-export async function analyzeDocumentFile(file: InspectionFile, options: { signal: AbortSignal }): Promise<AnalysisResult | null> {
+export async function analyzeDocumentFile(file: InspectionFile, options: { signal: AbortSignal; ocrAvailableOverride?: boolean }): Promise<AnalysisResult | null> {
   const ext = extension(file.name);
   if (ext === 'pdf') return analyzePdfFile(file, options);
   if (ext === 'docx') return analyzeOfficePackage(file, 'docx', 'DOCX analyzer', 'DOCX', () => analyzeDocxFile(file, options));

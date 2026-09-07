@@ -23,7 +23,9 @@ import {
   makeCorruptScannedPdfItem,
   makeJpegScannedPdfItem,
   makeMultiPageScannedPdfItem,
+  makeNoTextScannedPdfItem,
   makeOcrTextItem,
+  makePdfItem,
   makeScannedPdfItem
 } from './fixtures.mjs';
 import { renderTextPng } from './ocr-font.mjs';
@@ -81,18 +83,32 @@ async function diagnoseScannedPdf(makeItem, label) {
 
 async function assertScannedPdfOcr(makeItem, label) {
   const result = await analyzeItem(await makeItem(), { signal });
-  const ocrEvidence = result.evidence.find((entry) => entry.id === 'pdf-ocr-text');
-  if (!ocrEvidence || !ocrEvidence.value.trim()) {
+  const ocrSection = result.sections.find((section) => section.id === 'pdf-ocr');
+  const ocrTextSection = result.sections.find((section) => section.id === 'pdf-ocr-text');
+  if (!ocrSection || !ocrTextSection || !ocrTextSection.items.some((item) => item.value.trim())) {
     await diagnoseScannedPdf(makeItem, label);
   }
-  assert.equal(Boolean(ocrEvidence && ocrEvidence.value.trim()), true, `${label} scanned PDF has OCR text evidence`);
-  const upper = (ocrEvidence?.value ?? '').toUpperCase();
-  assert.ok(upper.includes('HELLO'), `${label} scanned PDF OCR recovered HELLO`);
-  assert.ok(upper.includes('WORLD'), `${label} scanned PDF OCR recovered WORLD`);
-  assert.equal(hasFinding(result, 'pdf-ocr-text-recovered'), true, `${label} scanned PDF marks recovered text`);
-  assert.ok(result.sections.some((section) => section.id === 'pdf-ocr'), `${label} scanned PDF has an OCR section`);
+  assert.ok(ocrSection, `${label} scanned PDF has an OCR status section`);
+  assert.equal(ocrSection.items.find((entry) => entry.id === 'pdf-ocr-status')?.value, 'Available', `${label} OCR status is Available`);
+  const words = result.evidence.find((entry) => entry.id === 'pdf-ocr-words');
+  assert.ok(words && Number(words.value) > 0, `${label} OCR words recovered > 0`);
+  assert.ok(ocrTextSection, `${label} scanned PDF has exactly one OCR text section`);
+  const allOcrText = ocrTextSection.items.map((item) => item.value).join(' ').toUpperCase();
+  assert.ok(allOcrText.includes('HELLO'), `${label} OCR text contains HELLO`);
+  assert.ok(allOcrText.includes('WORLD'), `${label} OCR text contains WORLD`);
+  // OCR page text must NOT be duplicated into other report sections.
+  const duplicatedOcrText = result.sections
+    .filter((section) => section.id !== 'pdf-ocr-text')
+    .some((section) => section.items.some((item) => String(item.value).toUpperCase().includes('HELLO')));
+  assert.equal(duplicatedOcrText, false, `${label} OCR text appears only in the OCR text section`);
+  // Native extraction facts stay honest: words = 0 for an image-only PDF.
+  assert.equal(result.evidence.find((entry) => entry.id === 'pdf-words')?.value, '0', `${label} native PDF words stay 0`);
+  assert.equal(hasFinding(result, 'pdf-ocr-text-recovered'), true, `${label} recovered-text finding present`);
+  assert.equal(result.unusual.filter((f) => f.id.startsWith('pdf-ocr')).length, 1, `${label} exactly one OCR finding`);
+  assert.equal(hasFinding(result, 'pdf-ocr'), false, `${label} no OCR-opportunity finding`);
+  assert.ok(result.recommendations.every((f) => !f.id.startsWith('pdf-ocr')), `${label} no OCR recommendation after success`);
+  assert.ok(!(result.limitations ?? []).some((item) => /OCR opportunity likely/i.test(item)), `${label} no stale OCR-opportunity limitation`);
 }
-
 export async function runMilestoneSixTests() {
   // --- OCR engine availability ----------------------------------------------
   {
@@ -175,33 +191,84 @@ export async function runMilestoneSixTests() {
     assert.equal(looksLikeJpeg(images[0].bytes), false, 'PNG is not mistaken for a JPEG');
   }
 
-  // --- Corrupt embedded page image: no fabricated OCR text --------------------
+  // --- Corrupt embedded page image: honest OCR failed state, no fake text ----
   {
     const result = await analyzeItem(await makeCorruptScannedPdfItem(), { signal });
-    assert.equal(result.evidence.some((entry) => entry.id === 'pdf-ocr-text'), false, 'corrupt page image yields no OCR text evidence');
-    assert.ok(!(result.evidence.some((entry) => entry.id === 'pdf-ocr-text' && entry.value.trim())), 'no fabricated OCR text for a corrupt image');
-    assert.equal(hasFinding(result, 'pdf-ocr-unreadable'), true, 'OCR failure is reported honestly (degraded, not silent)');
-    const recovered = result.unusual.find((finding) => finding.id === 'pdf-ocr-text-recovered');
-    assert.equal(recovered, undefined, 'no "text recovered" claim for a corrupt image');
+    const ocrSection = result.sections.find((s) => s.id === 'pdf-ocr');
+    assert.ok(ocrSection, 'OCR status section present for a corrupt scan');
+    assert.equal(ocrSection.items.find((i) => i.id === 'pdf-ocr-status')?.value, 'OCR failed', 'corrupt scan reports OCR failed');
+    assert.equal(hasFinding(result, 'pdf-ocr-unreadable'), true, 'OCR failure finding reported honestly');
+    assert.equal(hasFinding(result, 'pdf-ocr-text-recovered'), false, 'no recovered-text claim for a corrupt image');
+    assert.ok(!result.sections.some((s) => s.id === 'pdf-ocr-text'), 'no OCR text section for a corrupt image');
   }
 
   // --- Multi-page scanned PDF: per-page OCR + page association preserved -----
   {
     const result = await analyzeItem(await makeMultiPageScannedPdfItem(3), { signal });
-    assert.equal(hasEvidence(result, 'pdf-ocr-text'), true, 'multi-page scanned PDF has OCR text evidence');
-    const ocr = result.evidence.find((entry) => entry.id === 'pdf-ocr-text');
-    const upper = (ocr?.value ?? '').toUpperCase();
-    assert.ok(upper.includes('HELLO'), 'multi-page OCR recovered HELLO');
-    const section = result.sections.find((s) => s.id === 'pdf-ocr');
-    assert.ok(section, 'OCR section present');
+    const ocrSection = result.sections.find((s) => s.id === 'pdf-ocr');
+    assert.ok(ocrSection, 'OCR status section present');
+    assert.equal(ocrSection.items.find((i) => i.id === 'pdf-ocr-status')?.value, 'Available', 'OCR status Available');
+    assert.equal(ocrSection.items.find((i) => i.id === 'pdf-ocr-pages')?.value, '3', 'OCR pages processed = 3');
+    const wordsRecovered = ocrSection.items.find((i) => i.id === 'pdf-ocr-words');
+    assert.ok(wordsRecovered && Number(wordsRecovered.value) > 0, 'OCR words recovered > 0');
+    const confidence = ocrSection.items.find((i) => i.id === 'pdf-ocr-confidence');
+    assert.ok(confidence && /^\d+%$/.test(confidence.value), 'OCR average confidence present');
+    const section = result.sections.find((s) => s.id === 'pdf-ocr-text');
+    assert.ok(section, 'single OCR text section present');
+    assert.equal(section.collapsed, true, 'OCR text section is collapsed by default');
     const pages = section.items.filter((i) => /^Page \d+$/.test(i.label));
     assert.equal(pages.length, 3, 'per-page OCR rows for all 3 pages');
     for (const page of pages) {
       assert.ok(page.value.toUpperCase().includes('HELLO'), `page ${page.label} carries OCR text`);
     }
     assert.equal(hasFinding(result, 'pdf-ocr-text-recovered'), true, 'recovered-text finding present');
+    assert.equal(result.unusual.filter((f) => f.id.startsWith('pdf-ocr')).length, 1, 'one OCR finding only');
+    assert.equal(hasFinding(result, 'pdf-ocr'), false, 'no OCR-opportunity finding');
+    assert.ok(result.recommendations.every((f) => !f.id.startsWith('pdf-ocr')), 'no OCR recommendation after success');
     const density = result.evidence.find((e) => e.id === 'pdf-text-density');
     assert.ok(density && Number(density.value.replace(' words per page', '')) > 0, 'text density recalculated after OCR');
+    const extracted = result.sections.find((s) => s.id === 'pdf-text');
+    assert.ok(extracted, 'extracted text section present');
+    const extractedPages = extracted.items.filter((i) => /^Page \d+$/.test(i.label));
+    assert.equal(extractedPages.length, 3, 'extracted text shows per-page rows');
+    for (const page of extractedPages) {
+      assert.equal(page.value, 'No native text', 'image-only pages show No native text');
+    }
+  }
+
+  // --- Case A: native text PDF needs no OCR section/recommendation ----------
+  {
+    const result = await analyzeItem(await makePdfItem(), { signal });
+    const words = result.evidence.find((e) => e.id === 'pdf-words');
+    assert.ok(words && Number(words.value) > 0, 'native text PDF has words');
+    assert.equal(result.sections.some((s) => s.id === 'pdf-ocr' || s.id === 'pdf-ocr-text'), false, 'no OCR section for a healthy text PDF');
+    assert.ok(result.unusual.every((f) => !f.id.startsWith('pdf-ocr')), 'no OCR findings for a healthy text PDF');
+    assert.ok(result.recommendations.every((f) => !f.id.startsWith('pdf-ocr')), 'no OCR recommendations for a healthy text PDF');
+  }
+
+  // --- Case C: scanned PDF + OCR unavailable -> concise state + one rec ------
+  {
+    const result = await analyzeItem(await makeMultiPageScannedPdfItem(2), { signal, ocrAvailableOverride: false });
+    const ocrSection = result.sections.find((s) => s.id === 'pdf-ocr');
+    assert.ok(ocrSection, 'OCR section present when unavailable');
+    assert.equal(ocrSection.items.find((i) => i.id === 'pdf-ocr-status')?.value, 'OCR unavailable', 'status says OCR unavailable');
+    assert.ok(ocrSection.items.some((i) => i.id === 'pdf-ocr-reason' && /image-based pages/.test(i.value)), 'reason explains the scanned PDF');
+    assert.equal(result.recommendations.filter((f) => f.id.startsWith('pdf-ocr')).length, 1, 'exactly one OCR recommendation');
+    assert.ok(result.recommendations.some((f) => f.id === 'pdf-ocr-enable' && /Enable local OCR/.test(f.summary)), 'enable-OCR recommendation present');
+    assert.equal(hasFinding(result, 'pdf-ocr'), false, 'no OCR-opportunity finding when unavailable');
+    assert.equal(hasFinding(result, 'pdf-ocr-text-recovered'), false, 'no recovered-text finding when unavailable');
+    assert.ok(!result.sections.some((s) => s.id === 'pdf-ocr-text'), 'no OCR text section when unavailable');
+  }
+
+  // --- Case D: OCR runs but finds no meaningful text -------------------------
+  {
+    const result = await analyzeItem(await makeNoTextScannedPdfItem(), { signal });
+    const ocrSection = result.sections.find((s) => s.id === 'pdf-ocr');
+    assert.ok(ocrSection, 'OCR section present when no text is recovered');
+    assert.equal(ocrSection.items.find((i) => i.id === 'pdf-ocr-status')?.value, 'OCR completed \u2014 no meaningful text recovered', 'status says completed with no meaningful text');
+    assert.equal(hasFinding(result, 'pdf-ocr-text-recovered'), false, 'no false recovered-text finding');
+    assert.equal(hasFinding(result, 'pdf-ocr-unreadable'), false, 'no false failure finding when OCR ran');
+    assert.ok(!result.sections.some((s) => s.id === 'pdf-ocr-text'), 'no OCR text section when nothing was recovered');
   }
 
   // --- Desktop bridge makes OCR available even if the renderer copy cannot load

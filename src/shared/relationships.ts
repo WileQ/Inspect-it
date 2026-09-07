@@ -2,7 +2,7 @@
 // Produces a relationship model (ObjectRelationship[]) that can later power a
 // graph UI. Read-only.
 import type { InspectionItem, InspectionFile, ObjectRelationship } from './types.ts';
-import { findExactDuplicates, imageHashOf, imageSimilarity } from './duplicates.ts';
+import { findExactDuplicates, findTextNearDuplicates, imageHashOf, imageSimilarity } from './duplicates.ts';
 import { readText } from './analysis-utils.ts';
 import { formatBytes } from './utils.ts';
 
@@ -131,6 +131,27 @@ export async function findCrossObjectRelationships(items: InspectionItem[], opti
         }
       }
     }
+  }
+
+  // 4b) Text near-duplicates (character n-gram Jaccard).
+  const textCandidates: Array<{ path: string; name: string; text: string }> = [];
+  for (const file of files) {
+    if (!/\.(txt|md|markdown|log)$/i.test(file.name)) continue;
+    if (file.size <= 0 || file.size > 1024 * 1024) continue;
+    try {
+      textCandidates.push({ path: file.path, name: file.name, text: await readText(file, 256 * 1024) });
+    } catch {
+      // unreadable candidate skipped
+    }
+  }
+  for (const pair of findTextNearDuplicates(textCandidates.slice(0, 40), 0.75, 8, { excludeIdentical: true })) {
+    push({
+      type: 'similar-text',
+      label: `Similar text files (${Math.round(pair.similarity * 100)}%)`,
+      detail: `${basename(pair.leftPath)} and ${basename(pair.rightPath)} are near-duplicates but not byte-identical`,
+      objects: [pair.leftPath, pair.rightPath],
+      evidenceIds: []
+    }, index++);
   }
 
   // 5) Similar images (perceptual hash).

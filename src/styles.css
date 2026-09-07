@@ -619,6 +619,7 @@ button {
   font-size: 13.5px;
   text-align: left;
   word-break: break-word;
+  white-space: pre-wrap;
 }
 
 /* More button + extra details ---------------------------------------------- */
@@ -1379,4 +1380,14 @@ button {
   padding: 2px 8px;
   border-radius: 999px;
   border: 1px solid rgba(255, 170, 100, 0.4);
+}
+
+/* Collapsed report sections (e.g. long-form OCR text) */
+.report-section > summary.report-section-summary {
+  cursor: pointer;
+  user-select: none;
+  list-style-position: inside;
+}
+.report-section > summary.report-section-summary::-webkit-details-marker {
+  color: #ffb877;
 }

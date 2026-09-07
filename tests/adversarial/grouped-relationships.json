@@ -1,7 +1,28 @@
 {
  "multi-duplicate": {
   "analyzer": "folder",
-  "relationships": [],
+  "relationships": [
+   {
+    "type": "same-size",
+    "label": "Same size 310 B",
+    "objects": [
+     "relationships/dup_folder_c/report_final.txt",
+     "relationships/dup_folder_b/copy_of_report.txt",
+     "relationships/dup_folder_a/report.txt"
+    ],
+    "detail": "3 files are exactly 310 B"
+   },
+   {
+    "type": "duplicate",
+    "label": "Duplicate files (exact)",
+    "objects": [
+     "relationships/dup_folder_c/report_final.txt",
+     "relationships/dup_folder_b/copy_of_report.txt",
+     "relationships/dup_folder_a/report.txt"
+    ],
+    "detail": "3 copies, 620 B wasted; representative: relationships/dup_folder_c/report_final.txt"
+   }
+  ],
   "findings": [
    {
     "id": "folder-deep-exact-duplicates",
@@ -13,12 +34,39 @@
  },
  "near_dup_text": {
   "analyzer": "folder",
-  "relationships": [],
-  "findings": []
+  "relationships": [
+   {
+    "type": "similar-text",
+    "label": "Similar text files (88%)",
+    "objects": [
+     "relationships/near_dup_text/version_2_lightly_edited.txt",
+     "relationships/near_dup_text/version_1_original.txt"
+    ],
+    "detail": "version_2_lightly_edited.txt and version_1_original.txt are near-duplicates but not byte-identical"
+   }
+  ],
+  "findings": [
+   {
+    "id": "folder-deep-near-duplicate-text",
+    "title": "Near-duplicate text files",
+    "severity": "low",
+    "methodology": "ml"
+   }
+  ]
  },
  "similar_images": {
   "analyzer": "folder",
-  "relationships": [],
+  "relationships": [
+   {
+    "type": "similar-image",
+    "label": "Visually similar images (95%)",
+    "objects": [
+     "relationships/similar_images/logo_v2_with_watermark.png",
+     "relationships/similar_images/logo_v1.png"
+    ],
+    "detail": "logo_v2_with_watermark.png and logo_v1.png have similar perceptual hashes"
+   }
+  ],
   "findings": [
    {
     "id": "folder-deep-similar-images",
@@ -30,24 +78,105 @@
  },
  "cross_reference": {
   "analyzer": "folder",
-  "relationships": [],
+  "relationships": [
+   {
+    "type": "reference",
+    "label": "doc_b.md references doc_a.md",
+    "objects": [
+     "relationships/cross_reference/doc_b.md",
+     "relationships/cross_reference/doc_a.md"
+    ],
+    "detail": "\"doc_a\" appears in relationships/cross_reference/doc_b.md"
+   },
+   {
+    "type": "reference",
+    "label": "doc_a.md references shared_data.csv",
+    "objects": [
+     "relationships/cross_reference/doc_a.md",
+     "relationships/cross_reference/shared_data.csv"
+    ],
+    "detail": "\"shared_data\" appears in relationships/cross_reference/doc_a.md"
+   },
+   {
+    "type": "reference",
+    "label": "doc_a.md references doc_b.md",
+    "objects": [
+     "relationships/cross_reference/doc_a.md",
+     "relationships/cross_reference/doc_b.md"
+    ],
+    "detail": "\"doc_b\" appears in relationships/cross_reference/doc_a.md"
+   }
+  ],
   "findings": []
  },
  "conflicting_deps": {
   "analyzer": "folder",
-  "relationships": [],
+  "relationships": [
+   {
+    "type": "same-name",
+    "label": "Same filename \"package.json\"",
+    "objects": [
+     "relationships/conflicting_deps_folder/service_b/package.json",
+     "relationships/conflicting_deps_folder/service_a/package.json"
+    ],
+    "detail": "2 files share the name \"package.json\""
+   },
+   {
+    "type": "same-size",
+    "label": "Same size 63 B",
+    "objects": [
+     "relationships/conflicting_deps_folder/service_b/package.json",
+     "relationships/conflicting_deps_folder/service_a/package.json"
+    ],
+    "detail": "2 files are exactly 63 B"
+   },
+   {
+    "type": "shared-dependency",
+    "label": "Shared dependency shared-lib",
+    "objects": [
+     "relationships/conflicting_deps_folder/service_b/package.json",
+     "relationships/conflicting_deps_folder/service_a/package.json"
+    ],
+    "detail": "shared-lib appears in 2 manifests"
+   },
+   {
+    "type": "shared-dependency",
+    "label": "Version conflict for shared-lib",
+    "objects": [
+     "relationships/conflicting_deps_folder/service_b/package.json",
+     "relationships/conflicting_deps_folder/service_a/package.json"
+    ],
+    "detail": "^1.0.0 (relationships/conflicting_deps_folder/service_b/package.json), ^2.0.0 (relationships/conflicting_deps_folder/service_a/package.json)"
+   }
+  ],
   "findings": [
    {
     "id": "folder-duplicates",
     "title": "Duplicate files",
     "severity": "low",
     "methodology": null
+   },
+   {
+    "id": "folder-dependency-version-conflicts",
+    "title": "Conflicting dependency versions across manifests",
+    "severity": "medium",
+    "methodology": "anomaly"
    }
   ]
  },
  "same_name_diff_content": {
   "analyzer": "folder",
-  "relationships": [],
+  "relationships": [
+   {
+    "type": "same-name",
+    "label": "Same filename \"config.json\"",
+    "objects": [
+     "relationships/same_name_diff_content/dir2/config.json",
+     "relationships/same_name_diff_content/dir1/config.json"
+    ],
+    "detail": "2 files share the name \"config.json\""
+   }
+  ],
   "findings": [
    {
     "id": "folder-deep-dir-domination",
@@ -59,17 +188,299 @@
  },
  "same_size_diff_content": {
   "analyzer": "folder",
-  "relationships": [],
+  "relationships": [
+   {
+    "type": "same-size",
+    "label": "Same size 32 B",
+    "objects": [
+     "relationships/same_size_diff_content/file_b.bin",
+     "relationships/same_size_diff_content/file_a.bin"
+    ],
+    "detail": "2 files are exactly 32 B"
+   }
+  ],
   "findings": []
  },
  "should_not_link": {
   "analyzer": "folder",
-  "relationships": [],
+  "relationships": [
+   {
+    "type": "same-size",
+    "label": "Same size 1.00 KB",
+    "objects": [
+     "relationships/should_not_link/data_dump_beta.bin",
+     "relationships/should_not_link/data_dump_alpha.bin"
+    ],
+    "detail": "2 files are exactly 1.00 KB"
+   }
+  ],
   "findings": []
  },
  "images_dir": {
   "analyzer": "folder",
-  "relationships": [],
+  "relationships": [
+   {
+    "type": "same-size",
+    "label": "Same size 1.82 KB",
+    "objects": [
+     "images/similarity_exact_copy.png",
+     "images/similarity_base.png"
+    ],
+    "detail": "2 files are exactly 1.82 KB"
+   },
+   {
+    "type": "same-size",
+    "label": "Same size 512 B",
+    "objects": [
+     "images/random_binary_named_png.png",
+     "images/random_binary_named_jpg.jpg"
+    ],
+    "detail": "2 files are exactly 512 B"
+   },
+   {
+    "type": "same-size",
+    "label": "Same size 292 B",
+    "objects": [
+     "images/dup_b_exact_copy.png",
+     "images/dup_a_original.png"
+    ],
+    "detail": "2 files are exactly 292 B"
+   },
+   {
+    "type": "duplicate",
+    "label": "Duplicate files (exact)",
+    "objects": [
+     "images/similarity_exact_copy.png",
+     "images/similarity_base.png"
+    ],
+    "detail": "2 copies, 1.82 KB wasted; representative: images/similarity_exact_copy.png"
+   },
+   {
+    "type": "duplicate",
+    "label": "Duplicate files (exact)",
+    "objects": [
+     "images/dup_b_exact_copy.png",
+     "images/dup_a_original.png"
+    ],
+    "detail": "2 copies, 292 B wasted; representative: images/dup_b_exact_copy.png"
+   },
+   {
+    "type": "similar-image",
+    "label": "Visually similar images (100%)",
+    "objects": [
+     "images/unusual_metadata.png",
+     "images/truncated_bmp.bmp"
+    ],
+    "detail": "unusual_metadata.png and truncated_bmp.bmp have similar perceptual hashes"
+   },
+   {
+    "type": "similar-image",
+    "label": "Visually similar images (86%)",
+    "objects": [
+     "images/unusual_metadata.png",
+     "images/screenshot_no_text.png"
+    ],
+    "detail": "unusual_metadata.png and screenshot_no_text.png have similar perceptual hashes"
+   },
+   {
+    "type": "similar-image",
+    "label": "Visually similar images (100%)",
+    "objects": [
+     "images/unusual_metadata.png",
+     "images/misleading_extension_png_as_jpg.jpg"
+    ],
+    "detail": "unusual_metadata.png and misleading_extension_png_as_jpg.jpg have similar perceptual hashes"
+   },
+   {
+    "type": "similar-image",
+    "label": "Visually similar images (98%)",
+    "objects": [
+     "images/unusual_metadata.png",
+     "images/huge_dimension_8000x6000.png"
+    ],
+    "detail": "unusual_metadata.png and huge_dimension_8000x6000.png have similar perceptual hashes"
+   },
+   {
+    "type": "similar-image",
+    "label": "Visually similar images (100%)",
+    "objects": [
+     "images/unusual_metadata.png",
+     "images/huge_dimension_10000x1.png"
+    ],
+    "detail": "unusual_metadata.png and huge_dimension_10000x1.png have similar perceptual hashes"
+   },
+   {
+    "type": "similar-image",
+    "label": "Visually similar images (86%)",
+    "objects": [
+     "images/truncated_bmp.bmp",
+     "images/screenshot_no_text.png"
+    ],
+    "detail": "truncated_bmp.bmp and screenshot_no_text.png have similar perceptual hashes"
+   },
+   {
+    "type": "similar-image",
+    "label": "Visually similar images (100%)",
+    "objects": [
+     "images/truncated_bmp.bmp",
+     "images/misleading_extension_png_as_jpg.jpg"
+    ],
+    "detail": "truncated_bmp.bmp and misleading_extension_png_as_jpg.jpg have similar perceptual hashes"
+   },
+   {
+    "type": "similar-image",
+    "label": "Visually similar images (98%)",
+    "objects": [
+     "images/truncated_bmp.bmp",
+     "images/huge_dimension_8000x6000.png"
+    ],
+    "detail": "truncated_bmp.bmp and huge_dimension_8000x6000.png have similar perceptual hashes"
+   },
+   {
+    "type": "similar-image",
+    "label": "Visually similar images (100%)",
+    "objects": [
+     "images/truncated_bmp.bmp",
+     "images/huge_dimension_10000x1.png"
+    ],
+    "detail": "truncated_bmp.bmp and huge_dimension_10000x1.png have similar perceptual hashes"
+   },
+   {
+    "type": "similar-image",
+    "label": "Visually similar images (91%)",
+    "objects": [
+     "images/similarity_slightly_modified.png",
+     "images/similarity_resized_2x.png"
+    ],
+    "detail": "similarity_slightly_modified.png and similarity_resized_2x.png have similar perceptual hashes"
+   },
+   {
+    "type": "similar-image",
+    "label": "Visually similar images (100%)",
+    "objects": [
+     "images/similarity_slightly_modified.png",
+     "images/similarity_exact_copy.png"
+    ],
+    "detail": "similarity_slightly_modified.png and similarity_exact_copy.png have similar perceptual hashes"
+   },
+   {
+    "type": "similar-image",
+    "label": "Visually similar images (100%)",
+    "objects": [
+     "images/similarity_slightly_modified.png",
+     "images/similarity_different_format.bmp"
+    ],
+    "detail": "similarity_slightly_modified.png and similarity_different_format.bmp have similar perceptual hashes"
+   },
+   {
+    "type": "similar-image",
+    "label": "Visually similar images (100%)",
+    "objects": [
+     "images/similarity_slightly_modified.png",
+     "images/similarity_base.png"
+    ],
+    "detail": "similarity_slightly_modified.png and similarity_base.png have similar perceptual hashes"
+   },
+   {
+    "type": "similar-image",
+    "label": "Visually similar images (91%)",
+    "objects": [
+     "images/similarity_resized_2x.png",
+     "images/similarity_exact_copy.png"
+    ],
+    "detail": "similarity_resized_2x.png and similarity_exact_copy.png have similar perceptual hashes"
+   },
+   {
+    "type": "similar-image",
+    "label": "Visually similar images (91%)",
+    "objects": [
+     "images/similarity_resized_2x.png",
+     "images/similarity_different_format.bmp"
+    ],
+    "detail": "similarity_resized_2x.png and similarity_different_format.bmp have similar perceptual hashes"
+   },
+   {
+    "type": "similar-image",
+    "label": "Visually similar images (91%)",
+    "objects": [
+     "images/similarity_resized_2x.png",
+     "images/similarity_base.png"
+    ],
+    "detail": "similarity_resized_2x.png and similarity_base.png have similar perceptual hashes"
+   },
+   {
+    "type": "similar-image",
+    "label": "Visually similar images (100%)",
+    "objects": [
+     "images/similarity_exact_copy.png",
+     "images/similarity_different_format.bmp"
+    ],
+    "detail": "similarity_exact_copy.png and similarity_different_format.bmp have similar perceptual hashes"
+   },
+   {
+    "type": "similar-image",
+    "label": "Visually similar images (100%)",
+    "objects": [
+     "images/similarity_exact_copy.png",
+     "images/similarity_base.png"
+    ],
+    "detail": "similarity_exact_copy.png and similarity_base.png have similar perceptual hashes"
+   },
+   {
+    "type": "similar-image",
+    "label": "Visually similar images (100%)",
+    "objects": [
+     "images/similarity_different_format.bmp",
+     "images/similarity_base.png"
+    ],
+    "detail": "similarity_different_format.bmp and similarity_base.png have similar perceptual hashes"
+   },
+   {
+    "type": "similar-image",
+    "label": "Visually similar images (86%)",
+    "objects": [
+     "images/screenshot_no_text.png",
+     "images/misleading_extension_png_as_jpg.jpg"
+    ],
+    "detail": "screenshot_no_text.png and misleading_extension_png_as_jpg.jpg have similar perceptual hashes"
+   },
+   {
+    "type": "similar-image",
+    "label": "Visually similar images (86%)",
+    "objects": [
+     "images/screenshot_no_text.png",
+     "images/huge_dimension_10000x1.png"
+    ],
+    "detail": "screenshot_no_text.png and huge_dimension_10000x1.png have similar perceptual hashes"
+   },
+   {
+    "type": "similar-image",
+    "label": "Visually similar images (98%)",
+    "objects": [
+     "images/misleading_extension_png_as_jpg.jpg",
+     "images/huge_dimension_8000x6000.png"
+    ],
+    "detail": "misleading_extension_png_as_jpg.jpg and huge_dimension_8000x6000.png have similar perceptual hashes"
+   },
+   {
+    "type": "similar-image",
+    "label": "Visually similar images (100%)",
+    "objects": [
+     "images/misleading_extension_png_as_jpg.jpg",
+     "images/huge_dimension_10000x1.png"
+    ],
+    "detail": "misleading_extension_png_as_jpg.jpg and huge_dimension_10000x1.png have similar perceptual hashes"
+   },
+   {
+    "type": "similar-image",
+    "label": "Visually similar images (98%)",
+    "objects": [
+     "images/huge_dimension_8000x6000.png",
+     "images/huge_dimension_10000x1.png"
+    ],
+    "detail": "huge_dimension_8000x6000.png and huge_dimension_10000x1.png have similar perceptual hashes"
+   }
+  ],
   "findings": [
    {
     "id": "folder-deep-type-concentration",

@@ -63,7 +63,7 @@ export interface Visualization {
 /** A detected relationship between two or more inspected objects. */
 export interface ObjectRelationship {
   id: string;
-  type: 'duplicate' | 'same-name' | 'same-size' | 'shared-dependency' | 'reference' | 'similar-image' | 'other';
+  type: 'duplicate' | 'same-name' | 'same-size' | 'shared-dependency' | 'reference' | 'similar-image' | 'similar-text' | 'other';
   label: string;
   detail: string;
   objects: string[];
@@ -74,6 +74,8 @@ export interface AnalysisSection {
   id: string;
   title: string;
   items: Evidence[];
+  /** Render this section as a collapsed <details> block (long-form content). */
+  collapsed?: boolean;
 }
 
 export interface IdentitySummary {

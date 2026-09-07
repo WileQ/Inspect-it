@@ -423,6 +423,273 @@ function detectManifestDependencies(file: InspectionFile, text: string): { name:
   return { name: lower, directDependencies: [], devDependencies: [] };
 }
 
+
+/** Quality notes for supported single-file manifests (read-only; no vuln claims). */
+function manifestQualityNotes(file: InspectionFile, text: string): { evidence: Evidence[]; findings: Finding[] } {
+  const evidenceList: Evidence[] = [];
+  const findings: Finding[] = [];
+  const lower = file.name.toLowerCase();
+  const pushNote = (kind: string, detail: string, severity: Finding['severity'], methodology: Finding['methodology'], category: Finding['category']) => {
+    const id = `manifest-quality-${findings.length + 1}`;
+    evidenceList.push(evidence(id, kind, detail));
+    findings.push({ id: `manifest-${kind.replace(/\s+/g, '-').toLowerCase()}${findings.length === 0 ? '' : '-' + findings.length}`, title: kind, summary: detail, severity, evidence: [id], methodology, confidence: 'medium', category });
+  };
+  if (lower === 'package.json') {
+    try {
+      const parsed = JSON.parse(text) as Record<string, unknown>;
+      const seen = new Map<string, string[]>();
+      for (const section of ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']) {
+        const map = parsed[section];
+        if (!map || typeof map !== 'object') continue;
+        for (const [name, version] of Object.entries(map as Record<string, unknown>)) {
+          const sections = seen.get(name) ?? [];
+          sections.push(section);
+          seen.set(name, sections);
+          if (version === null || version === undefined) {
+            pushNote('Null version spec', `"${name}" in ${section} has a null version.`, 'low', 'heuristic', 'quality');
+          } else if (typeof version !== 'string') {
+            pushNote('Non-string version spec', `"${name}" in ${section} has a non-string version (${typeof version}).`, 'low', 'heuristic', 'quality');
+          } else if (version.trim() === '' || version.trim() === '*' || /^latest$/i.test(version.trim())) {
+            pushNote('Unpinned/floating version', `"${name}" in ${section} uses "${version.trim()}" (not reproducible).`, 'low', 'heuristic', 'quality');
+          } else if (/^(git\+|https?:|file:|workspace:|link:)/.test(version.trim())) {
+            pushNote('VCS/URL/local reference', `"${name}" in ${section} references a non-registry source: ${version.trim().slice(0, 60)}.`, 'info', 'fact', 'quality');
+          }
+        }
+      }
+      for (const [name, sections] of seen) {
+        if (new Set(sections).size > 1) {
+          pushNote('Cross-section duplicate dependency', `"${name}" is declared in ${sections.join(' and ')}.`, 'low', 'heuristic', 'quality');
+        }
+      }
+    } catch {
+      // JSON parse handled elsewhere (invalid manifest finding).
+    }
+  }
+  if (lower === 'requirements.txt') {
+    const declared = new Map<string, string[]>();
+    const invalidNames: string[] = [];
+    for (const raw of text.split(/\r?\n/)) {
+      const line = raw.replace(/#.*/, '').trim();
+      if (!line) continue;
+      let clean = line;
+      if (/^-e\s+/.test(clean)) clean = clean.replace(/^-e\s+/, '');
+      if (/^(git|hg|svn|bzr)\+/.test(clean)) {
+        const egg = clean.match(/#egg=([^\s]+)/)?.[1] ?? 'VCS package';
+        pushNote('VCS-based install', '"' + egg + '" is installed from a version-control URL, bypassing registry pinning.', 'info', 'fact', 'quality');
+        continue;
+      }
+      if (clean.startsWith('-') || clean.startsWith('.')) continue;
+      clean = clean.split(';')[0].trim();
+      const rawToken = clean.match(/^[^\s]+/)?.[0] ?? '';
+      const versionAt = clean.search(/==|>=|<=|~=|!=|===/);
+      const nameRaw = versionAt >= 0 ? clean.slice(0, versionAt) : rawToken;
+      const nameTrimmed = nameRaw.trim();
+      if (nameTrimmed && (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(nameTrimmed) || /[-.]$/.test(nameTrimmed))) {
+        if (!invalidNames.includes(nameTrimmed)) invalidNames.push(nameTrimmed);
+        continue;
+      }
+      const match = clean.match(/^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(.*)$/);
+      if (!match) continue;
+      const name = match[1];
+      const spec = match[2].trim();
+      const specs = declared.get(name) ?? [];
+      specs.push(spec);
+      declared.set(name, specs);
+      if (!spec) {
+        pushNote('Unpinned dependency', '"' + name + '" is unpinned (no version constraint).', 'low', 'heuristic', 'quality');
+        continue;
+      }
+      const parts = spec.split(',').map((part) => part.trim()).filter(Boolean);
+      const lowerBounds: number[] = [];
+      const upperBounds: number[] = [];
+      for (const part of parts) {
+        const cm = part.match(/^\s*(>=|<=|>|<|==|!=|~=|===)?\s*([0-9]+(?:\.[0-9]+)*)/);
+        if (!cm) continue;
+        const op = cm[1] || '';
+        const value = parseFloat(cm[2]);
+        if (op === '>=' || op === '>') lowerBounds.push(value);
+        if (op === '<=' || op === '<') upperBounds.push(value);
+      }
+      if (lowerBounds.length && upperBounds.length && Math.max(...lowerBounds) >= Math.min(...upperBounds)) {
+        pushNote('Impossible version range', '"' + name + '" has an impossible range: ' + spec + '.', 'medium', 'anomaly', 'quality');
+      }
+    }
+    for (const invalid of invalidNames) {
+      if (invalid) pushNote('Invalid package name', '"' + invalid + '" is not a valid Python package name.', 'low', 'anomaly', 'quality');
+    }
+    for (const [name, specs] of declared) {
+      if (specs.length > 1) {
+        const unique = [...new Set(specs.map((s) => s || '(unpinned)'))];
+        if (unique.length > 1) {
+          pushNote('Conflicting duplicate dependency', '"' + name + '" is pinned multiple ways: ' + unique.join(' ; ') + '.', 'medium', 'anomaly', 'quality');
+        } else {
+          pushNote('Duplicate dependency declaration', '"' + name + '" is declared ' + specs.length + ' times with the same constraint.', 'low', 'anomaly', 'quality');
+        }
+      }
+    }
+  }
+
+  // --- Cargo.toml: duplicate TOML keys -------------------------------------
+  if (lower === 'cargo.toml') {
+    let section = '';
+    const seen = new Map<string, Set<string>>();
+    const pushCargo = (kind: string, detail: string) => {
+      const id = 'manifest-cargo-' + kind.replace(/\s+/g, '-').toLowerCase();
+      evidenceList.push(evidence(id, 'Cargo.toml', detail));
+      findings.push({ id, title: 'Cargo.toml: ' + kind, summary: detail, severity: 'low', evidence: [id], methodology: 'anomaly', confidence: 'high', category: 'quality' });
+    };
+    for (const raw of text.split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) continue;
+      const sec = line.match(/^\[([^\]]+)\]$/);
+      if (sec) { section = sec[1]; continue; }
+      const key = line.match(/^([A-Za-z0-9_.-]+)\s*=/);
+      if (key && section) {
+        const set = seen.get(section) ?? new Set();
+        if (set.has(key[1])) pushCargo('duplicate key', `"${key[1]}" is declared twice in [${section}]`);
+        set.add(key[1]);
+        seen.set(section, set);
+      }
+    }
+  }
+  // --- go.mod: duplicate requires + zero pseudo-versions ---------------------
+  if (lower === 'go.mod') {
+    const modules = new Map<string, string[]>();
+    const pushGo = (kind: string, detail: string) => {
+      const id = 'manifest-gomod-' + kind.replace(/\s+/g, '-').toLowerCase();
+      evidenceList.push(evidence(id, 'go.mod', detail));
+      findings.push({ id, title: 'go.mod: ' + kind, summary: detail, severity: 'low', evidence: [id], methodology: 'anomaly', confidence: 'high', category: 'quality' });
+    };
+    let inRequireBlock = false;
+    for (const raw of text.split(/\r?\n/)) {
+      const line = raw.trim();
+      if (line === 'require (') { inRequireBlock = true; continue; }
+      if (inRequireBlock && line === ')') { inRequireBlock = false; continue; }
+      const m = inRequireBlock ? line.match(/^([\w./\-]+)\s+(v[\w.\-+]+)$/) : line.match(/^require\s+([^\s]+)\s+(v[\w.\-+]+)/);
+      if (m) {
+        const arr = modules.get(m[1]) ?? [];
+        arr.push(m[2]);
+        modules.set(m[1], arr);
+        if (/^v0\.0\.0-00010101000000-000000000000$/.test(m[2])) pushGo('zero pseudo-version', '"' + m[1] + '" uses the zero pseudo-version ' + m[2] + ', which usually indicates an unresolved replace.');
+      }
+    }
+    for (const [name, versions] of modules) {
+      if (versions.length > 1) pushGo('duplicate require', '"' + name + '" is required ' + versions.length + ' times (' + versions.join(', ') + ').');
+    }
+  }
+
+  // --- pom.xml: duplicate/conflicting + self dependencies --------------------
+  if (lower === 'pom.xml') {
+    try {
+      const xml = parseXml(text) as Record<string, unknown>;
+      const project = (xml.project ?? xml) as Record<string, unknown>;
+      const selfId = String(project.artifactId ?? project.name ?? '').trim();
+      const items = (project.dependencies as Record<string, unknown> | undefined)?.dependency;
+      const list = Array.isArray(items) ? items : items ? [items] : [];
+      const byKey = new Map<string, string[]>();
+      const pushPom = (kind: string, detail: string) => {
+        const id = 'manifest-pom-' + kind.replace(/\s+/g, '-').toLowerCase();
+        evidenceList.push(evidence(id, 'pom.xml', detail));
+        findings.push({ id, title: 'pom.xml: ' + kind, summary: detail, severity: 'low', evidence: [id], methodology: 'anomaly', confidence: 'high', category: 'quality' });
+      };
+      for (const entry of list) {
+        const dep = entry as Record<string, unknown>;
+        const art = String(dep.artifactId ?? 'unknown');
+        const group = String(dep.groupId ?? '');
+        const version = dep.version ? String(dep.version) : '';
+        const key = group + ':' + art;
+        const arr = byKey.get(key) ?? [];
+        if (version) arr.push(version);
+        byKey.set(key, arr);
+        if (selfId && art === selfId) pushPom('self dependency', `The project depends on its own artifact "${art}".`);
+      }
+      for (const [key, versions] of byKey) {
+        if (versions.length > 1 && new Set(versions).size > 1) pushPom('conflicting versions', `"${key}" is declared with multiple versions: ${[...new Set(versions)].join(', ')}.`);
+      }
+    } catch {
+      // parse failure handled by the caller (malformed manifest finding)
+    }
+  }
+  // --- Gradle: dependency declarations ---------------------------------------
+  if (lower === 'build.gradle' || lower === 'build.gradle.kts') {
+    const deps: string[] = [];
+    for (const m of text.matchAll(/(?:implementation|api|compileOnly|runtimeOnly|testImplementation|testRuntimeOnly)\s*(?:\(|\s)?['"]([^'"]+)['"]/g)) deps.push(m[1]);
+    const byName = new Map<string, string[]>();
+    const pushGradle = (kind: string, detail: string) => {
+      const id = 'manifest-gradle-' + kind.replace(/\s+/g, '-').toLowerCase();
+      evidenceList.push(evidence(id, lower, detail));
+      findings.push({ id, title: 'Gradle: ' + kind, summary: detail, severity: 'low', evidence: [id], methodology: 'anomaly', confidence: 'high', category: 'quality' });
+    };
+    for (const dep of deps) {
+      const parts = dep.split(':');
+      if (parts.length >= 3) {
+        const name = parts.slice(0, 2).join(':');
+        const version = parts.slice(2).join(':');
+        const arr = byName.get(name) ?? [];
+        arr.push(version);
+        byName.set(name, arr);
+      } else {
+        pushGradle('missing version', `"${dep}" declares no version (not reproducible).`);
+      }
+    }
+    for (const [name, versions] of byName) {
+      if (versions.length > 1 && new Set(versions).size > 1) pushGradle('conflicting versions', `"${name}" is declared with multiple versions: ${[...new Set(versions)].join(', ')}.`);
+    }
+  }
+  // --- Gemfile: duplicates + impossible constraints --------------------------
+  if (lower === 'gemfile') {
+    const gems = new Map<string, string[]>();
+    const pushGem = (kind: string, detail: string) => {
+      const id = 'manifest-gem-' + kind.replace(/\s+/g, '-').toLowerCase();
+      evidenceList.push(evidence(id, 'Gemfile', detail));
+      findings.push({ id, title: 'Gemfile: ' + kind, summary: detail, severity: 'low', evidence: [id], methodology: 'anomaly', confidence: 'high', category: 'quality' });
+    };
+    for (const line of text.split(/\r?\n/)) {
+      const m = line.match(/^\s*gem\s+['"]([^'"]+)['"](.*)$/);
+      if (!m) continue;
+      const name = m[1];
+      const rest = m[2];
+      const constraints = [...rest.matchAll(/['"]([<>=~]+\s*[\d.]+)['"]/g)].map((x) => x[1].replace(/\s+/g, ''));
+      const arr = gems.get(name) ?? [];
+      arr.push(constraints.join(' '));
+      gems.set(name, arr);
+      if (constraints.length) {
+        const ge = constraints.filter((x) => x.startsWith('>=')).map((x) => parseFloat(x.replace('>=', '')));
+        const le = constraints.filter((x) => x.startsWith('<')).map((x) => parseFloat(x.replace('<', '')));
+        if (ge.length && le.length && Math.max(...ge) >= Math.min(...le)) pushGem('impossible constraint', `"${name}" has an impossible range: ${constraints.join(' ')}.`);
+      }
+    }
+    for (const [name, specs] of gems) {
+      if (specs.length > 1) pushGem('duplicate declaration', `"${name}" is declared ${specs.length} times.`);
+    }
+  }
+  // --- pyproject.toml: duplicate keys / floating versions --------------------
+  if (lower === 'pyproject.toml') {
+    let section = '';
+    const seen = new Map<string, Set<string>>();
+    const pushPy = (kind: string, detail: string) => {
+      const id = 'manifest-pyproject-' + kind.replace(/\s+/g, '-').toLowerCase();
+      evidenceList.push(evidence(id, 'pyproject.toml', detail));
+      findings.push({ id, title: 'pyproject.toml: ' + kind, summary: detail, severity: 'low', evidence: [id], methodology: 'anomaly', confidence: 'high', category: 'quality' });
+    };
+    for (const raw of text.split(/\r?\n/)) {
+      const line = raw.trim();
+      const sec = line.match(/^\[([^\]]+)\]$/);
+      if (sec) { section = sec[1]; continue; }
+      const key = line.match(/^([A-Za-z0-9_.-]+)\s*=\s*["'](.*)["']$/);
+      if (key && /dependencies/i.test(section)) {
+        const set = seen.get(section) ?? new Set();
+        if (set.has(key[1])) pushPy('duplicate key', `"${key[1]}" is declared twice in [${section}]`);
+        set.add(key[1]);
+        seen.set(section, set);
+        const spec = key[2];
+        if (!spec || spec === '*' || /^latest$/i.test(spec)) pushPy('floating version', `"${key[1]}" uses an unpinned spec "${spec}".`);
+      }
+    }
+  }
+  return { evidence: evidenceList, findings };
+}
+
 function analyzeManifest(file: InspectionFile, text: string, fingerprint: string): AnalysisResult {
   const kind = manifestKind(file) ?? 'package-json';
   const parsed = detectManifestDependencies(file, text);
@@ -448,6 +715,9 @@ function analyzeManifest(file: InspectionFile, text: string, fingerprint: string
   if (parsed.directDependencies.length === 0) {
     unusual.push(finding('manifest-empty', 'No direct dependencies detected', 'The manifest does not declare direct runtime dependencies.', 'info', ['manifest-dependencies']));
   }
+  const qualityNotes = manifestQualityNotes(file, text);
+  evidenceList.push(...qualityNotes.evidence);
+  unusual.push(...qualityNotes.findings);
   const recommendations: Finding[] = [];
   if (parsed.devDependencies.length > 0) {
     recommendations.push(finding('manifest-dev-review', 'Review development dependencies', 'Development-only packages are present and may be worth auditing separately.', 'low', ['manifest-dev-dependencies']));
@@ -703,6 +973,87 @@ function analyzeSourceCode(file: InspectionFile, text: string, fingerprint: stri
   if (duplicateLines > 0) {
     unusual.push(finding('code-repeat', 'Repeated lines', 'Repeated line patterns were detected in the file.', 'low', ['code-lines']));
   }
+  // --- Structural code-quality heuristics (static; never executes) -----------
+  const nulCount = (text.match(/\u0000/g) ?? []).length;
+  if (nulCount > 0) {
+    const eid = 'code-null-bytes';
+    evidenceList.push(evidence(eid, 'NUL bytes', formatNumber(nulCount)));
+    unusual.push({ id: 'code-null-bytes', title: 'Embedded NUL bytes', summary: 'The source contains ' + nulCount + ' NUL byte(s); interpreters would reject it.', severity: 'low', evidence: [eid], methodology: 'anomaly', confidence: 'high', category: 'quality', metrics: { nulBytes: nulCount } });
+  }
+  const whitespaceChars = (text.match(/\s/g) ?? []).length;
+  const whitespaceRatio = text.length ? whitespaceChars / text.length : 1;
+  const looksMinified = totalLines <= 3 && text.length > 150 && whitespaceRatio < 0.1;
+  if (looksMinified && /\.(js|mjs|cjs|ts|tsx|jsx)$/i.test(file.name)) {
+    const statements = (text.match(/;/g) ?? []).length;
+    const fnTokens = (text.match(/\b(?:function|=>)\b|\bclass\s+/g) ?? []).length;
+    const eid = 'code-minified';
+    evidenceList.push(evidence(eid, 'Minified source', text.length + ' bytes, ~' + statements + ' statements'));
+    unusual.push({ id: 'code-minified', title: 'Minified source code', summary: 'The file looks minified (' + text.length + ' bytes on ' + totalLines + ' line(s), ' + Math.round(whitespaceRatio * 100) + '% whitespace).', severity: 'info', evidence: [eid], methodology: 'heuristic', confidence: 'high', category: 'structure', metrics: { bytes: text.length, lines: totalLines, statements: statements, functionTokens: fnTokens } });
+  }
+  const generatedHeader = /(auto-?generated|do not edit|generated by|@generated|code generated)/i.test(text.slice(0, 2000));
+  if (generatedHeader) {
+    const eid = 'code-generated';
+    evidenceList.push(evidence(eid, 'Generated-code signal', 'generated header marker'));
+    unusual.push({ id: 'code-generated', title: 'Likely generated code', summary: 'The file begins with a generated-code marker.', severity: 'info', evidence: [eid], methodology: 'heuristic', confidence: 'medium', category: 'structure', metrics: { generatedHeader: 1 } });
+  }
+  if (longestLine.length > 50000) {
+    unusual.push({ id: 'code-huge-line', title: 'Pathologically long line', summary: 'One line is ' + longestLine.length + ' characters, which can break line-oriented tooling.', severity: 'low', evidence: ['code-longest-line'], methodology: 'anomaly', confidence: 'high', category: 'structure', metrics: { lineLength: longestLine.length } });
+  }
+  const opens = (text.match(/[({[]/g) ?? []).length;
+  const closes = (text.match(/[)}\]]/g) ?? []).length;
+  if (opens !== closes && text.length < 1024 * 1024) {
+    const eid = 'code-unbalanced-delimiters';
+    evidenceList.push(evidence(eid, 'Delimiter balance', opens + ' open vs ' + closes + ' close'));
+    unusual.push({ id: 'code-malformed-source', title: 'Possibly malformed source (unbalanced delimiters)', summary: 'The file has ' + opens + ' opening and ' + closes + ' closing delimiters; the source may be truncated or syntactically invalid.', severity: 'low', evidence: [eid], methodology: 'heuristic', confidence: 'medium', category: 'quality', metrics: { open: opens, close: closes } });
+  }
+  if (ext === 'py') {
+    const pyDefs = (text.match(/^\s*def\s+\w+/gm) ?? []).length;
+    const foreignTokens = (text.match(/(?:^|\n)\s*(?:func\s+\w+\s*\(|function\s+\w+\s*\(|console\.log\s*\()/g) ?? []).length;
+    if (pyDefs === 0 && foreignTokens > 0) {
+      const eid = 'code-language-mismatch';
+      evidenceList.push(evidence(eid, 'Language/extension mismatch', 'content looks like a non-Python language despite the .py extension'));
+      unusual.push({ id: 'code-language-mismatch', title: 'Content does not look like Python', summary: 'The file uses a .py extension but contains non-Python constructs and no def statements.', severity: 'low', evidence: [eid, 'code-language'], methodology: 'heuristic', confidence: 'medium', category: 'quality' });
+    }
+  }
+  if (ext === 'py') {
+    let prevIndent = -1;
+    let prevEndsColon = false;
+    let blockStyles = new Set<string>();
+    let mixedTabsSpaces = false;
+    let unexpectedIndent = false;
+    let unexpectedDedent = false;
+    let seenLevels = new Set<number>([0]);
+    let depth = 0;
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      depth += (line.match(/[(\[\{]/g) ?? []).length - (line.match(/[)\]\}]/g) ?? []).length;
+      if (depth > 0) continue;
+      const raw = line.match(/^[ \t]*/)?.[0] ?? '';
+      const visual = raw.replace(/\t/g, '    ').length;
+      if (visual === 0) { seenLevels = new Set<number>([0]); prevIndent = -1; prevEndsColon = false; blockStyles = new Set<string>(); continue; }
+      blockStyles.add(raw.includes('\t') ? 'tab' : 'space');
+      if (blockStyles.size > 1) mixedTabsSpaces = true;
+      if (prevIndent >= 0 && !/^\s*(?:#|\/\/)/.test(line)) {
+        if (visual > prevIndent && !prevEndsColon) unexpectedIndent = true;
+        if (visual < prevIndent && !seenLevels.has(visual)) unexpectedDedent = true;
+      }
+      seenLevels.add(visual);
+      prevIndent = visual;
+      prevEndsColon = /:\s*(?:#.*)?$/.test(trimmed);
+    }
+    if (mixedTabsSpaces) {
+      const eid = 'code-python-mixed-indentation';
+      evidenceList.push(evidence(eid, 'Indentation', 'mixed tabs and spaces in the same block'));
+      unusual.push({ id: 'code-python-mixed-indentation', title: 'Mixed tabs and spaces (possible TabError)', summary: 'Indented lines in the same block mix tab and space prefixes; Python 3 may reject this.', severity: 'low', evidence: [eid], methodology: 'heuristic', confidence: 'medium', category: 'quality' });
+    }
+    if (unexpectedIndent || unexpectedDedent) {
+      const eid = 'code-python-indentation-error';
+      evidenceList.push(evidence(eid, 'Indentation', (unexpectedIndent ? 'indent increases without a preceding colon' : '') + (unexpectedIndent && unexpectedDedent ? '; ' : '') + (unexpectedDedent ? 'dedent to an unseen level' : '')));
+      unusual.push({ id: 'code-python-indentation-error', title: 'Inconsistent indentation (possible IndentationError)', summary: 'The indentation structure is not consistent with valid Python.', severity: 'low', evidence: [eid], methodology: 'heuristic', confidence: 'medium', category: 'quality' });
+    }
+  }
+
   const recommendations: Finding[] = [];
   if (functions > 20 && totalLines > 500) {
     recommendations.push(finding('code-review', 'Review large source file', 'Large source files can benefit from smaller units with clearer boundaries.', 'low', ['code-lines']));

@@ -732,19 +732,33 @@ export default function App() {
               </section>
             ) : null}
 
-            {remainingSections.map((section) => (
-              <section className="report-section" key={section.id}>
-                <h2 className="report-section-title">{section.title}</h2>
-                <dl className="fact-list">
-                  {section.items.map((item) => (
-                    <div className="fact-row" key={item.id}>
-                      <dt>{item.label}</dt>
-                      <dd>{item.value}</dd>
-                    </div>
-                  ))}
-                </dl>
-              </section>
-            ))}
+            {remainingSections.map((section) =>
+              section.collapsed ? (
+                <details className="report-section" key={section.id}>
+                  <summary className="report-section-title report-section-summary">{section.title}</summary>
+                  <dl className="fact-list">
+                    {section.items.map((item) => (
+                      <div className="fact-row" key={item.id}>
+                        <dt>{item.label}</dt>
+                        <dd>{item.value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </details>
+              ) : (
+                <section className="report-section" key={section.id}>
+                  <h2 className="report-section-title">{section.title}</h2>
+                  <dl className="fact-list">
+                    {section.items.map((item) => (
+                      <div className="fact-row" key={item.id}>
+                        <dt>{item.label}</dt>
+                        <dd>{item.value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </section>
+              )
+            )}
 
             {result.recommendations.length ? (
               <section className="report-section">

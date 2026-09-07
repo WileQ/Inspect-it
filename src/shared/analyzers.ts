@@ -12,6 +12,8 @@
 } from './types.ts';
 import { analyzeArchiveFile } from './archive.ts';
 import { analyzeCodeFile, collectProjectSignals } from './code.ts';
+import { analyzeGitMetadataFile } from './git-file.ts';
+import { collectDependencyGraph, dependencyRelationships } from './dependencies.ts';
 import { analyzeDocumentFile } from './documents.ts';
 import { analyzeMediaFile } from './media.ts';
 import { analyzeSqliteFile } from './sqlite.ts';
@@ -26,9 +28,10 @@ import {
   skewness,
   uniqueRatio
 } from './anomaly.ts';
-import { decodeImage, findExactDuplicates, imageHashOf, imageSimilarity, summarizeDuplicates } from './duplicates.ts';
+import { decodeImage, findExactDuplicates, findTextNearDuplicates, imageHashOf, imageSimilarity, summarizeDuplicates } from './duplicates.ts';
 import { analyzePixels, classifyImageScene, extractJpegExif } from './image-analysis.ts';
 import { findCrossObjectRelationships } from './relationships.ts';
+import { contentIdentityChecks, filenameChecks } from './object-identity.ts';
 import { isOcrAvailable, ocrImage, ocrWorthwhile } from './ocr.ts';
 import {
   digestHex,
@@ -49,6 +52,8 @@ export interface AnalyzeOptions {
   signal: AbortSignal;
   onProgress?: (progress: ProgressSnapshot) => void;
   onPartial?: (result: Partial<AnalysisResult>) => void;
+  /** Test seam: force the OCR availability state reported to analyzers. */
+  ocrAvailableOverride?: boolean;
 }
 
 export interface Analyzer {
@@ -167,10 +172,43 @@ function makeFolderIdentity(folder: InspectionFolder, fingerprint: string, size:
   };
 }
 
+interface DecodedText { text: string; encoding: string; validUtf8: boolean; }
+
+function decodeTextBytes(bytes: Uint8Array): DecodedText {
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    return { text: new TextDecoder('utf-8').decode(bytes.subarray(3)), encoding: 'UTF-8 (BOM)', validUtf8: true };
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
+    return { text: new TextDecoder('utf-16le').decode(bytes.subarray(2)), encoding: 'UTF-16 LE (BOM)', validUtf8: false };
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
+    return { text: new TextDecoder('utf-16be').decode(bytes.subarray(2)), encoding: 'UTF-16 BE (BOM)', validUtf8: false };
+  }
+  let validUtf8 = true;
+  try { new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch { validUtf8 = false; }
+  if (validUtf8) {
+    return { text: new TextDecoder('utf-8').decode(bytes), encoding: 'UTF-8', validUtf8: true };
+  }
+  // Fall back to Latin-1 instead of silently emitting replacement characters.
+  return { text: new TextDecoder('latin1').decode(bytes), encoding: 'Latin-1 (non-UTF-8)', validUtf8: false };
+}
+
+function binaryControlRatio(bytes: Uint8Array): number {
+  if (!bytes.length) return 0;
+  const sample = bytes.slice(0, 8192);
+  let control = 0;
+  for (const value of sample) {
+    if (value === 0 || value < 7 || (value > 13 && value < 32)) control += 1;
+  }
+  return control / sample.length;
+}
+
 async function analyzeTextFile(file: InspectionFile, bytes: Uint8Array, options: AnalyzeOptions): Promise<AnalysisResult> {
   ensureNotAborted(options.signal);
   options.onProgress?.({ completed: 1, total: 4, step: 'Reading text' });
-  const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+  const decoded = decodeTextBytes(bytes);
+  const text = decoded.text;
+  const controlRatio = binaryControlRatio(bytes);
   options.onProgress?.({ completed: 2, total: 4, step: 'Measuring lines and words' });
   const lines = text.split(/\r\n|\n|\r/);
   const words = text.match(/\b[\p{L}\p{N}_-]+\b/gu) ?? [];
@@ -183,12 +221,13 @@ async function analyzeTextFile(file: InspectionFile, bytes: Uint8Array, options:
   }
   const repeated = sortDescending([...repeatedLineEntries.entries()].filter(([, count]) => count > 1)).slice(0, 5);
   const fingerprint = await fingerprintFile(file);
-  const identity = makeIdentity(file, fingerprint, 'plain text');
+  const identity = makeIdentity(file, fingerprint, decoded.encoding.startsWith('UTF-16') ? 'unicode text' : 'plain text');
   const evidence = [
     createEvidence('text-lines', 'Lines', formatNumber(lines.length)),
     createEvidence('text-words', 'Words', formatNumber(words.length)),
     createEvidence('text-blank', 'Blank lines', formatNumber(blankLines)),
-    createEvidence('text-longest', 'Longest line', `${longestLine.length} characters`)
+    createEvidence('text-longest', 'Longest line', `${longestLine.length} characters`),
+    createEvidence('text-encoding', 'Encoding', decoded.encoding)
   ];
   const repeatedEvidence = repeated.map(([line, count], index) =>
     createEvidence(`repeated-${index}`, `Repeated line ${index + 1}`, `"${line.slice(0, 80)}" appears ${count} times`)
@@ -205,6 +244,27 @@ async function analyzeTextFile(file: InspectionFile, bytes: Uint8Array, options:
   const unusual: Finding[] = [];
   if (repeated[0] && repeated[0][1] > 3) {
     unusual.push(createFinding('text-repeat', 'Repeated line cluster', 'The file repeats the same line multiple times.', 'medium', ['repeated-0']));
+  }
+  if (decoded.encoding.startsWith('UTF-16')) {
+    unusual.push({ id: 'text-utf16', title: 'UTF-16 encoded text', summary: `Text was decoded as ${decoded.encoding}; UTF-16 files are common for Windows exports but unusual for plain source/text.`, severity: 'info', evidence: ['text-encoding'], methodology: 'fact', confidence: 'measured', category: 'structure' });
+  } else if (decoded.encoding === 'Latin-1 (non-UTF-8)') {
+    unusual.push({ id: 'text-latin1', title: 'Non-UTF-8 (Latin-1) text', summary: 'The file is not valid UTF-8 and was decoded using the Latin-1 fallback to avoid replacement-character corruption.', severity: 'low', evidence: ['text-encoding'], methodology: 'heuristic', confidence: 'high', category: 'structure' });
+  }
+  const crlf = (text.match(/\r\n/g) ?? []).length;
+  const lfOnly = (text.match(/(?<!\r)\n/g) ?? []).length;
+  const crOnly = (text.match(/\r(?!\n)/g) ?? []).length;
+  const mixedEndings = (crlf > 0 && (lfOnly > 0 || crOnly > 0)) || (lfOnly > 0 && crOnly > 0);
+  if (mixedEndings) {
+    evidence.push(createEvidence('text-line-endings', 'Line endings', `CRLF ${crlf}, LF ${lfOnly}, CR ${crOnly}`));
+    unusual.push({ id: 'text-mixed-line-endings', title: 'Mixed line endings', summary: `The file mixes line-ending styles (CRLF ${crlf}, LF ${lfOnly}, CR ${crOnly}), which can indicate merged or generated text.`, severity: 'low', evidence: ['text-line-endings'], methodology: 'anomaly', confidence: 'high', category: 'structure', metrics: { crlf, lf: lfOnly, cr: crOnly } });
+  }
+  if (longestLine.length > 50000) {
+    evidence.push(createEvidence('text-huge-line', 'Longest line', `${longestLine.length} characters`));
+    unusual.push({ id: 'text-huge-line', title: 'Pathologically long line', summary: `One line is ${longestLine.length} characters, which can break line-oriented tooling.`, severity: 'low', evidence: ['text-huge-line'], methodology: 'anomaly', confidence: 'high', category: 'structure', metrics: { lineLength: longestLine.length } });
+  }
+  if (controlRatio > 0.05 && !decoded.encoding.startsWith('UTF-16') && decoded.encoding !== 'Latin-1 (non-UTF-8)') {
+    evidence.push(createEvidence('text-binary-signal', 'Binary content signal', `${Math.round(controlRatio * 100)}% NUL/control bytes`));
+    unusual.push({ id: 'text-binary-content', title: 'Binary or mixed content in text file', summary: `The file contains NUL/control bytes (${Math.round(controlRatio * 100)}% of the sample); it is not clean UTF-8 text.`, severity: 'medium', evidence: ['text-binary-signal', 'text-encoding'], methodology: 'anomaly', confidence: 'high', category: 'structure', metrics: { controlRatio: Number(controlRatio.toFixed(3)) } });
   }
   const result: AnalysisResult = {
     objectKind: 'file',
@@ -1337,10 +1397,42 @@ async function analyzeFolderDeep(folder: InspectionFolder, stats: { fileCount: n
     sections.push({ id: 'folder-deep', title: 'Deep analysis', items: evidence.slice(0, 14) });
   }
 
-  // 6) Cross-object relationships for multi-object selections.
+  // 5b) Text near-duplicates (character n-gram Jaccard).
+  const textLikeFiles = files.filter((file) => /\.(txt|md|markdown|log)$/i.test(file.name) && file.size > 0 && file.size <= 1024 * 1024).slice(0, 40);
+  if (textLikeFiles.length >= 2) {
+    const textEntries: Array<{ path: string; name: string; text: string }> = [];
+    for (const file of textLikeFiles) {
+      ensureNotAborted(options.signal);
+      try {
+        const sample = new Uint8Array(await file.file.slice(0, 256 * 1024).arrayBuffer());
+        textEntries.push({ path: file.path, name: file.name, text: new TextDecoder('utf-8', { fatal: false }).decode(sample) });
+      } catch {
+        // unreadable candidate skipped
+      }
+    }
+    const textPairs = findTextNearDuplicates(textEntries, 0.75, 6, { excludeIdentical: true });
+    textPairs.forEach((pair, index) => {
+      evidence.push(createEvidence(`folder-deep-text-${index}`, `Similar text ${index + 1}`, `${pair.leftPath} ~ ${pair.rightPath} (${Math.round(pair.similarity * 100)}%)`));
+    });
+    if (textPairs.length) {
+      findings.push({
+        id: 'folder-deep-near-duplicate-text',
+        title: 'Near-duplicate text files',
+        summary: `${textPairs.length} text pair(s) are highly similar but not byte-identical (>= 75%).`,
+        severity: 'low',
+        evidence: textPairs.slice(0, 6).map((_, index) => `folder-deep-text-${index}`),
+        methodology: 'ml',
+        confidence: 'medium',
+        category: 'duplicates',
+        metrics: { pairs: textPairs.length }
+      });
+    }
+  }
+
+  // 6) Cross-object relationships (folders and multi-object selections).
   let relationships: AnalysisResult['relationships'];
-  if (folder.path.startsWith('selection://') && folder.children.length >= 2) {
-    relationships = await findCrossObjectRelationships(folder.children.slice(0, 60), { signal: options.signal });
+  if (files.length >= 2) {
+    relationships = await findCrossObjectRelationships(files.slice(0, 60), { signal: options.signal });
     if (relationships?.length) {
       sections.push({
         id: 'folder-relationships',
@@ -1458,6 +1550,46 @@ async function analyzeFolder(folder: InspectionFolder, options: AnalyzeOptions):
   if (projectSignals.git && projectSignals.git.branches.length > 1) {
     unusual.push(createFinding('folder-branches', 'Multiple branches detected', 'More than one Git branch is present in the repository metadata.', 'info', ['folder-git-branches']));
   }
+  // Cross-manifest dependency conflict aggregation for projects.
+  let depRelationships: AnalysisResult['relationships'] = [];
+  if (isProject) {
+    const depGraph = await collectDependencyGraph(folder, { signal: options.signal, maxFiles: 400 });
+    const conflicts = depGraph.versionInconsistencies;
+    if (conflicts.length) {
+      evidence.push(createEvidence('folder-dep-conflicts', 'Dependency version conflicts', formatNumber(conflicts.length)));
+      conflicts.slice(0, 3).forEach((conflict, index) => {
+        const detail = conflict.versions.map((entry) => entry.version + ' (' + entry.manifest + ')').join('; ');
+        evidence.push(createEvidence('folder-dep-conflict-' + index, 'Conflict ' + (index + 1), conflict.name + ': ' + detail));
+      });
+      unusual.push({
+        id: 'folder-dependency-version-conflicts',
+        title: 'Conflicting dependency versions across manifests',
+        summary: conflicts.length + ' shared package(s) have inconsistent version constraints across manifests (' + conflicts.slice(0, 2).map((conflict) => conflict.name).join(', ') + ').',
+        severity: 'medium',
+        evidence: ['folder-dep-conflicts'],
+        methodology: 'anomaly',
+        confidence: 'high',
+        category: 'relationships',
+        metrics: { conflicts: conflicts.length }
+      });
+    }
+    if (depGraph.duplicatedDependencies.length) {
+      evidence.push(createEvidence('folder-dep-shared', 'Shared dependencies across manifests', formatNumber(depGraph.duplicatedDependencies.length)));
+    }
+    depRelationships = dependencyRelationships(depGraph);
+    if (depRelationships.length) {
+      sections.push({
+        id: 'folder-dependencies',
+        title: 'Dependencies',
+        items: [
+          createEvidence('folder-dep-manifests', 'Manifests', formatNumber(depGraph.manifests.length)),
+          createEvidence('folder-dep-conflicts', 'Version conflicts', formatNumber(conflicts.length)),
+          createEvidence('folder-dep-shared', 'Shared dependencies', formatNumber(depGraph.duplicatedDependencies.length))
+        ]
+      });
+    }
+  }
+
   // Deep analysis (anomalies, duplicates, similar images, relationships, visualizations).
   const deep = await analyzeFolderDeep(folder, { fileCount: stats.fileCount, totalBytes: stats.totalBytes }, options);
   sections.push(...deep.sections);
@@ -1483,7 +1615,7 @@ async function analyzeFolder(folder: InspectionFolder, options: AnalyzeOptions):
     generatedAt: new Date().toISOString(),
     sourceSummary: `${formatNumber(stats.fileCount)} files, ${formatNumber(stats.folderCount)} folders`,
     visualizations: deep.visualizations.length ? deep.visualizations : undefined,
-    relationships: deep.relationships?.length ? deep.relationships : undefined
+    relationships: (deep.relationships?.length || depRelationships.length) ? [...(deep.relationships ?? []), ...depRelationships] : undefined
   };
   options.onProgress?.({ completed: 4, total: 4, step: 'Folder analysis complete' });
   options.onPartial?.(result);
@@ -1530,43 +1662,72 @@ async function fileAnalyzer(item: InspectionItem, options: AnalyzeOptions): Prom
   if (item.kind !== 'file') {
     throw new Error('File analyzer can only process files');
   }
-  const document = await analyzeDocumentFile(item, { signal: options.signal });
+  const gitMeta = await analyzeGitMetadataFile(item, { signal: options.signal });
+  if (gitMeta) {
+    return gitMeta;
+  }
+  let result: AnalysisResult | null = null;
+  const document = await analyzeDocumentFile(item, { signal: options.signal, ocrAvailableOverride: options.ocrAvailableOverride });
   if (document) {
-    return document;
+    result = document;
+  } else {
+    const archive = await analyzeArchiveFile(item, { signal: options.signal });
+    if (archive) {
+      result = archive;
+    } else {
+      const sqlite = await analyzeSqliteFile(item, { signal: options.signal });
+      if (sqlite) {
+        result = sqlite;
+      } else {
+        const media = await analyzeMediaFile(item, { signal: options.signal });
+        if (media) {
+          result = media;
+        } else {
+          const code = await analyzeCodeFile(item, { signal: options.signal });
+          if (code) {
+            result = code;
+          } else {
+            const bytes = await fileBytes(item.file);
+            const name = item.name.toLowerCase();
+            if (name.endsWith('.json') || name.endsWith('.jsonl') || item.mimeType.includes('json')) {
+              result = await analyzeJsonFile(item, bytes, options);
+            } else if (name.endsWith('.csv') || name.endsWith('.tsv') || item.mimeType.includes('csv') || item.mimeType.includes('tab-separated')) {
+              result = await analyzeCsvFile(item, bytes, options);
+            } else if (item.mimeType.startsWith('image/') || /\.(png|jpg|jpeg|gif|webp|bmp)$/i.test(item.name)) {
+              result = await analyzeImageFile(item, bytes, options);
+            } else if (isTextLikeName(item.name) || item.mimeType.startsWith('text/')) {
+              result = await analyzeTextFile(item, bytes, options);
+            } else {
+              result = await analyzeGenericFile(item, bytes, options);
+            }
+          }
+        }
+      }
+    }
   }
-  const archive = await analyzeArchiveFile(item, { signal: options.signal });
-  if (archive) {
-    return archive;
+  // Filename + content identity checks apply to every single-file result so
+  // misleading names/extensions and trivially-truncated containers surface as
+  // findings regardless of which analyzer produced the report.
+  const headLimit = Math.min(item.file.size, 512 * 1024);
+  const head = headLimit > 0 ? new Uint8Array(await item.file.slice(0, headLimit).arrayBuffer()) : new Uint8Array();
+  const nameChecks = filenameChecks(item.name);
+  const contentChecks = item.file.size > 0 ? contentIdentityChecks(item.name, head, item.file.size) : { evidence: [], findings: [] };
+  const knownEvidence = new Set(result.evidence.map((entry) => entry.id));
+  const knownFindings = new Set([...result.unusual, ...result.important, ...result.recommendations].map((entry) => entry.id));
+  for (const entry of [...nameChecks.evidence, ...contentChecks.evidence]) {
+    if (!knownEvidence.has(entry.id)) {
+      result.evidence.push(entry);
+      knownEvidence.add(entry.id);
+    }
   }
-  const sqlite = await analyzeSqliteFile(item, { signal: options.signal });
-  if (sqlite) {
-    return sqlite;
+  for (const entry of [...nameChecks.findings, ...contentChecks.findings]) {
+    if (!knownFindings.has(entry.id)) {
+      result.unusual.push(entry);
+      knownFindings.add(entry.id);
+    }
   }
-  const media = await analyzeMediaFile(item, { signal: options.signal });
-  if (media) {
-    return media;
-  }
-  const code = await analyzeCodeFile(item, { signal: options.signal });
-  if (code) {
-    return code;
-  }
-  const bytes = await fileBytes(item.file);
-  const name = item.name.toLowerCase();
-  if (name.endsWith('.json') || name.endsWith('.jsonl') || item.mimeType.includes('json')) {
-    return analyzeJsonFile(item, bytes, options);
-  }
-  if (name.endsWith('.csv') || name.endsWith('.tsv') || item.mimeType.includes('csv') || item.mimeType.includes('tab-separated')) {
-    return analyzeCsvFile(item, bytes, options);
-  }
-  if (item.mimeType.startsWith('image/') || /\.(png|jpg|jpeg|gif|webp|bmp)$/i.test(item.name)) {
-    return analyzeImageFile(item, bytes, options);
-  }
-  if (isTextLikeName(item.name) || item.mimeType.startsWith('text/')) {
-    return analyzeTextFile(item, bytes, options);
-  }
-  return analyzeGenericFile(item, bytes, options);
+  return result;
 }
-
 export const analyzers: Analyzer[] = [
   {
     id: 'folder',

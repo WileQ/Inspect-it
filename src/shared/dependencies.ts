@@ -43,6 +43,22 @@ function extractDependencies(fileName: string, text: string): Array<{ name: stri
       return [];
     }
   }
+  if (lower === 'pyproject.toml') {
+    const seen = new Map<string, string>();
+    let section = '';
+    const add = (name: string, version?: string) => { if (name && !seen.has(name)) seen.set(name, version || ''); };
+    for (const line of text.split(/\r?\n/)) {
+      const sec = line.match(/^\s*\[([^\]]+)\]/);
+      if (sec) { section = sec[1]; continue; }
+      if (!/dependencies/i.test(section)) continue;
+      const kv = line.match(/^\s*([A-Za-z0-9_.-]+)\s*=\s*["']([^"']*)["']/);
+      if (kv) add(kv[1], kv[2] || undefined);
+    }
+    for (const m of text.matchAll(/["']([A-Za-z0-9_.-]+)\s*(==|>=|<=|~=|!=|<|>)\s*([^"']+)["']/g)) {
+      add(m[1], m[2] + m[3]);
+    }
+    return [...seen.entries()].map(([name, version]) => ({ name, version: version || undefined }));
+  }
   if (lower === 'requirements.txt') {
     return text
       .split(/\r?\n/)

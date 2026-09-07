@@ -297,7 +297,7 @@ export interface TextNearDuplicate {
 }
 
 /** Find near-duplicate text pairs with candidate filtering (length gate). */
-export function findTextNearDuplicates(files: Array<{ path: string; name: string; text: string }>, threshold = 0.75, maxPairs = 8): TextNearDuplicate[] {
+export function findTextNearDuplicates(files: Array<{ path: string; name: string; text: string }>, threshold = 0.75, maxPairs = 8, options?: { excludeIdentical?: boolean }): TextNearDuplicate[] {
   const candidates = files.filter((file) => file.text.length > 0);
   const results: TextNearDuplicate[] = [];
   for (let i = 0; i < candidates.length; i += 1) {
@@ -307,7 +307,7 @@ export function findTextNearDuplicates(files: Array<{ path: string; name: string
       const right = candidates[j];
       if (!sameLengthFamily(left.text, right.text)) continue;
       const similarity = textSimilarity(left.text, right.text);
-      if (similarity >= threshold) {
+      if (similarity >= threshold && !(options?.excludeIdentical && similarity >= 1)) {
         results.push({ left: left.path, right: right.path, similarity, leftPath: left.path, rightPath: right.path });
       }
     }
