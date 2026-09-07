@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent,
 import { AiReportSection } from './components/ai-report.tsx';
 import { AiSettingsSection } from './components/ai-settings.tsx';
 import { itemsFromDropEvent, itemsFromFileList } from './shared/files.ts';
-import { loadHistory, loadSettings, saveSettings } from './shared/history.ts';
+import { clearHistory, loadHistory, loadSettings, removeHistoryEntry, saveSettings, searchHistory, sortHistory, summarizeHistoryEntry } from './shared/history.ts';
 import { runInspection } from './shared/inspection.ts';
 import {
   aiCacheKeyFor,
@@ -125,8 +125,8 @@ function severityClass(severity: string): string {
   return severity || 'info';
 }
 
-function FindingRow(props: { finding: Finding; evidence: Map<string, string>; showEvidence: boolean }): JSX.Element {
-  const { finding, evidence, showEvidence } = props;
+function FindingRow(props: { finding: Finding; evidence: Map<string, string>; showEvidence: boolean; onOpenEvidence?: (id: string) => void }): JSX.Element {
+  const { finding, evidence, showEvidence, onOpenEvidence } = props;
   const chips = showEvidence ? finding.evidence : finding.evidence.slice(0, 2);
   return (
     <div className={`finding-row severity-${severityClass(finding.severity)}`}>
@@ -138,10 +138,21 @@ function FindingRow(props: { finding: Finding; evidence: Map<string, string>; sh
       <div className="finding-row-summary">{finding.summary}</div>
       {chips.length ? (
         <div className="finding-where">
-          <span className="where-label">Where to look</span>
+          <span className="where-label">Evidence</span>
           <div className="finding-evidence">
             {chips.map((id) => (
-              <span className="evidence-chip" key={id}>{evidence.get(id) || humanizeId(id)}</span>
+              <button
+                type="button"
+                className="evidence-chip evidence-chip-button"
+                key={id}
+                title="Open evidence"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onOpenEvidence?.(id);
+                }}
+              >
+                {evidence.get(id) || humanizeId(id)}
+              </button>
             ))}
           </div>
         </div>
@@ -149,7 +160,6 @@ function FindingRow(props: { finding: Finding; evidence: Map<string, string>; sh
     </div>
   );
 }
-
 /* ------------------------------------------------------------------ */
 /* App                                                                */
 /* ------------------------------------------------------------------ */
@@ -167,6 +177,9 @@ export default function App() {
   const [urlInput, setUrlInput] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [focusEvidence, setFocusEvidence] = useState<string | null>(null);
+  const [historyQuery, setHistoryQuery] = useState('');
+  const [historySort, setHistorySort] = useState<'recent' | 'name' | 'severity'>('recent');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const runRef = useRef<RunState>({});
@@ -177,6 +190,29 @@ export default function App() {
   const [aiRun, setAiRun] = useState<AiRunState>({ status: 'idle' });
   const [aiTest, setAiTest] = useState<{ testing: boolean; result: ConnectionTestResult | null }>({ testing: false, result: null });
   const aiRunRef = useRef<AbortController | null>(null);
+  const historyList = sortHistory(searchHistory(history, historyQuery), historySort);
+  const removeEntry = (id: string) => {
+    setHistory(removeHistoryEntry(id));
+  };
+  const clearAllHistory = () => {
+    clearHistory();
+    setHistory([]);
+  };
+
+
+  useEffect(() => {
+    if (!focusEvidence) {
+      return;
+    }
+    const el = document.getElementById('ev-' + focusEvidence);
+    if (!el) {
+      return;
+    }
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.add('evidence-focus');
+    const timer = window.setTimeout(() => el.classList.remove('evidence-focus'), 1800);
+    return () => window.clearTimeout(timer);
+  }, [focusEvidence]);
 
   useEffect(() => {
     if (!desktop || !window.inspectItDesktop) {
@@ -684,7 +720,7 @@ export default function App() {
             <h2 className="report-section-title">Findings</h2>
             <div className="finding-list">
               {findings.map((finding) => (
-                <FindingRow key={finding.id} finding={finding} evidence={activeEvidence} showEvidence={showDetails} />
+                <FindingRow key={finding.id} finding={finding} evidence={activeEvidence} showEvidence={showDetails} onOpenEvidence={(id) => { setDetailsOpen(true); setFocusEvidence(id); }} />
               ))}
             </div>
           </section>
@@ -700,7 +736,7 @@ export default function App() {
             <h2 className="report-section-title">{firstSection.title || 'Facts'}</h2>
             <dl className="fact-list">
               {keyFacts.map((item) => (
-                <div className="fact-row" key={item.id}>
+                <div className="fact-row" id={`ev-${item.id}`} key={item.id}>
                   <dt>{item.label}</dt>
                   <dd>{item.value}</dd>
                 </div>
@@ -723,7 +759,7 @@ export default function App() {
                 <h2 className="report-section-title">{firstSection.title}</h2>
                 <dl className="fact-list">
                   {firstSection.items.slice(keyFacts.length).map((item) => (
-                    <div className="fact-row" key={item.id}>
+                    <div className="fact-row" id={`ev-${item.id}`} key={item.id}>
                       <dt>{item.label}</dt>
                       <dd>{item.value}</dd>
                     </div>
@@ -738,7 +774,7 @@ export default function App() {
                   <summary className="report-section-title report-section-summary">{section.title}</summary>
                   <dl className="fact-list">
                     {section.items.map((item) => (
-                      <div className="fact-row" key={item.id}>
+                      <div className="fact-row" id={`ev-${item.id}`} key={item.id}>
                         <dt>{item.label}</dt>
                         <dd>{item.value}</dd>
                       </div>
@@ -750,7 +786,7 @@ export default function App() {
                   <h2 className="report-section-title">{section.title}</h2>
                   <dl className="fact-list">
                     {section.items.map((item) => (
-                      <div className="fact-row" key={item.id}>
+                      <div className="fact-row" id={`ev-${item.id}`} key={item.id}>
                         <dt>{item.label}</dt>
                         <dd>{item.value}</dd>
                       </div>
@@ -765,7 +801,7 @@ export default function App() {
                 <h2 className="report-section-title">Recommendations</h2>
                 <div className="finding-list">
                   {result.recommendations.map((finding) => (
-                    <FindingRow key={finding.id} finding={finding} evidence={activeEvidence} showEvidence={false} />
+                    <FindingRow key={finding.id} finding={finding} evidence={activeEvidence} showEvidence={false} onOpenEvidence={(id) => { setDetailsOpen(true); setFocusEvidence(id); }} />
                   ))}
                 </div>
               </section>
@@ -1002,17 +1038,53 @@ export default function App() {
             ) : null}
             <div className="main-column">
               {renderReport()}
-              {showHistory && history.length ? (
+              {showHistory ? (
                 <section className="report-section history-section">
-                  <h2 className="report-section-title">History</h2>
-                  <div className="history-list">
-                    {history.slice(0, 5).map((entry) => (
-                      <button type="button" key={entry.id} className="history-item" onClick={() => reopenHistory(entry)}>
-                        <span className="history-name">{entry.targetName}</span>
-                        <span className="history-meta">{entry.analyzerName} - {entry.summary}</span>
-                      </button>
-                    ))}
+                  <div className="history-toolbar">
+                    <h2 className="report-section-title">History</h2>
+                    <button type="button" className="secondary-button history-clear" onClick={clearAllHistory} disabled={!history.length}>Clear history</button>
                   </div>
+                  {history.length ? (
+                    <>
+                      <div className="history-controls">
+                        <input className="history-search" type="search" placeholder="Search history?" value={historyQuery} onChange={(event) => setHistoryQuery(event.target.value)} aria-label="Search history" />
+                        <select value={historySort} onChange={(event) => setHistorySort(event.target.value as 'recent' | 'name' | 'severity')} aria-label="Sort history">
+                          <option value="recent">Recent</option>
+                          <option value="name">Name</option>
+                          <option value="severity">Severity</option>
+                        </select>
+                      </div>
+                      {historyList.length ? (
+                        <div className="history-list">
+                          {historyList.slice(0, 30).map((entry) => {
+                            const summary = summarizeHistoryEntry(entry);
+                            const badge = entry.status && entry.status !== 'completed' ? entry.status : 'completed';
+                            return (
+                              <div className="history-row" key={entry.id}>
+                                <button type="button" className="history-item" onClick={() => reopenHistory(entry)}>
+                                  <span className="history-name">{entry.targetName}</span>
+                                  <span className="history-meta">{entry.analyzerName} - {entry.summary}</span>
+                                  <span className="history-sub">
+                                    {badge} ? {summary.findingCount} finding(s)
+                                    {summary.bySeverity.high ? ` ? ${summary.bySeverity.high} high` : ''}
+                                    {summary.bySeverity.medium ? ` ? ${summary.bySeverity.medium} medium` : ''}
+                                    {summary.ocrUsed ? ' ? OCR' : ''}
+                                    {summary.llmUsed ? ' ? AI' : ''}
+                                    {entry.sourceUnavailable ? ' ? source unavailable' : ''}
+                                  </span>
+                                </button>
+                                <button type="button" className="history-delete" title="Delete entry" aria-label="Delete history entry" onClick={() => removeEntry(entry.id)}>?</button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p className="report-note">No history entries match your search.</p>
+                      )}
+                    </>
+                  ) : (
+                    <p className="report-note history-empty">No analyses yet. Drop a file or folder to start your analysis library.</p>
+                  )}
                 </section>
               ) : null}
             </div>

@@ -1,9 +1,9 @@
 import { XMLParser } from 'fast-xml-parser';
-import type { AnalysisSection, Evidence, Finding, InspectionFile } from './types.ts';
+import type { AnalysisSection, Evidence, EvidenceLocation, Finding, InspectionFile } from './types.ts';
 import { formatNumber } from './utils.ts';
 
-export function evidence(id: string, label: string, value: string): Evidence {
-  return { id, label, value };
+export function evidence(id: string, label: string, value: string, location?: EvidenceLocation): Evidence {
+  return location ? { id, label, value, location } : { id, label, value };
 }
 
 export function finding(id: string, title: string, summary: string, severity: Finding['severity'], evidenceIds: string[]): Finding {

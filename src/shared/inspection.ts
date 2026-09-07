@@ -47,6 +47,8 @@ export async function runInspection(options: RunInspectionOptions): Promise<Anal
   const finalCacheKey = cacheKey;
   const finalResult = { ...result, cacheKey: finalCacheKey, identity: { ...result.identity, fingerprint: result.identity.fingerprint || fingerprint.slice(0, 12) } };
   setCachedResult(finalCacheKey, finalResult);
+  const findingIds = [...(finalResult.unusual || []), ...(finalResult.important || [])].map((f) => f.id);
+  const ocrUsed = findingIds.includes('pdf-ocr-text-recovered') || (finalResult.evidence || []).some((entry) => entry.id === 'pdf-ocr-words' || entry.id === 'image-ocr' || entry.id === 'pdf-ocr-status');
   const historyEntry: HistoryEntry = {
     id: session.id,
     targetName: finalResult.targetName,
@@ -55,7 +57,11 @@ export async function runInspection(options: RunInspectionOptions): Promise<Anal
     fingerprint,
     summary: finalResult.sourceSummary,
     result: finalResult,
-    createdAt: Date.now()
+    createdAt: Date.now(),
+    status: 'completed',
+    durationMs: session.startedAt ? Date.now() - session.startedAt : undefined,
+    ocrUsed,
+    llmUsed: false
   };
   appendHistory(historyEntry);
   options.onState({

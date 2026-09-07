@@ -219,6 +219,8 @@ export async function runMilestoneSixTests() {
     const pages = section.items.filter((i) => /^Page \d+$/.test(i.label));
     assert.equal(pages.length, 3, 'per-page OCR rows for all 3 pages');
     for (const page of pages) {
+      assert.equal(page.location?.type, 'page', `${page.label} has page location`);
+      assert.equal(page.location?.page, Number(page.label.split(' ')[1]), `${page.label} location matches page number`);
       assert.ok(page.value.toUpperCase().includes('HELLO'), `page ${page.label} carries OCR text`);
     }
     assert.equal(hasFinding(result, 'pdf-ocr-text-recovered'), true, 'recovered-text finding present');

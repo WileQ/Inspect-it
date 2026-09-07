@@ -229,9 +229,11 @@ async function analyzeTextFile(file: InspectionFile, bytes: Uint8Array, options:
     createEvidence('text-longest', 'Longest line', `${longestLine.length} characters`),
     createEvidence('text-encoding', 'Encoding', decoded.encoding)
   ];
-  const repeatedEvidence = repeated.map(([line, count], index) =>
-    createEvidence(`repeated-${index}`, `Repeated line ${index + 1}`, `"${line.slice(0, 80)}" appears ${count} times`)
-  );
+  const repeatedEvidence = repeated.map(([line, count], index) => {
+    const first = lines.findIndex((candidate) => candidate.trim() === line);
+    const base = createEvidence(`repeated-${index}`, `Repeated line ${index + 1}`, `"${line.slice(0, 80)}" appears ${count} times`);
+    return first >= 0 ? { ...base, location: { type: 'line' as const, label: `line ${first + 1}`, startLine: first + 1 } } : base;
+  });
   options.onProgress?.({ completed: 3, total: 4, step: 'Summarizing text structure' });
   const sections = [
     ...baseSections('text-summary', 'Facts', evidence),
@@ -960,6 +962,7 @@ async function analyzeImageFile(file: InspectionFile, bytes: Uint8Array, options
   const visualizations: Visualization[] = [];
   const limitations: string[] = [];
   let sceneLikelihood: number | undefined;
+  let sceneLabel: string | undefined;
   // Pixel-level analysis: colors, brightness, contrast, sharpness, perceptual
   // hash. Decoding is bounded (small images are cheap; huge ones are skipped).
   if (megapixels <= 12 && parsed.width > 0 && parsed.height > 0) {
@@ -986,6 +989,7 @@ async function analyzeImageFile(file: InspectionFile, bytes: Uint8Array, options
           }
           const scene = classifyImageScene(pixels);
           sceneLikelihood = scene.textLikelihood;
+          sceneLabel = scene.label;
           evidence.push(createEvidence('image-scene', 'Content type', scene.label));
           evidence.push(createEvidence('image-text-likelihood', 'Text likelihood', `${Math.round(scene.textLikelihood * 100)}%`));
           evidence.push(createEvidence('image-edge-density', 'Edge density', `${Math.round(pixels.edgeDensity * 100)}%`));
@@ -993,7 +997,7 @@ async function analyzeImageFile(file: InspectionFile, bytes: Uint8Array, options
             unusual.push({
               id: 'image-text-like',
               title: 'Text-like content detected',
-              summary: `Pixel analysis estimates a ${Math.round(scene.textLikelihood * 100)}% likelihood of readable text (${scene.reason.toLowerCase()}).`,
+              summary: `Pixel analysis suggests the image may contain readable text (${Math.round(scene.textLikelihood * 100)}% likelihood); OCR extracts it locally when available (${scene.reason.toLowerCase()}).`,
               severity: 'info',
               evidence: ['image-text-likelihood', 'image-scene'],
               methodology: 'heuristic',
@@ -1094,9 +1098,11 @@ async function analyzeImageFile(file: InspectionFile, bytes: Uint8Array, options
     height: parsed.height,
     textLikelihood: sceneLikelihood
   });
-  if (!ocrCheck.worthwhile && sceneLikelihood !== undefined) {
+  const textLikeScene = sceneLabel ? /document|scan|screenshot|ui|mixed/i.test(sceneLabel) : false;
+  const shouldAttemptOcr = ocrCheck.worthwhile || (sceneLikelihood !== undefined && sceneLikelihood >= 0.3) || textLikeScene;
+  if (!shouldAttemptOcr && sceneLikelihood !== undefined) {
     evidence.push(createEvidence('image-ocr', 'OCR', `Skipped - content is not text-like (${Math.round(sceneLikelihood * 100)}% likelihood)`));
-  } else if (ocrCheck.worthwhile) {
+  } else if (shouldAttemptOcr) {
     if (await isOcrAvailable()) {
       const outcome = await ocrImage(bytes.slice(0, 8 * 1024 * 1024));
       if (outcome.available && outcome.text.trim()) {

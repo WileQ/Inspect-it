@@ -155,11 +155,11 @@ export async function analyzePdfFile(file: InspectionFile, options: { signal: Ab
       id: 'pdf-text',
       title: 'Extracted text',
       items: perPage.length
-        ? perPage.slice(0, 8).map((page, index) => evidence(`pdf-page-${index}`, `Page ${index + 1}`, page.replace(/\s+/g, ' ').trim().slice(0, 400) || 'No native text'))
+        ? perPage.slice(0, 8).map((page, index) => evidence(`pdf-page-${index}`, `Page ${index + 1}`, page.replace(/\s+/g, ' ').trim().slice(0, 400) || 'No native text', { type: 'page', label: `Page ${index + 1}`, page: index + 1 }))
         : textSnippets.length
           ? [evidence('pdf-text-preview', 'Text preview', extraction.text.replace(/\s+/g, ' ').trim().slice(0, 400) || '(no text)')]
           : pageCount > 0
-            ? Array.from({ length: Math.min(pageCount, 8) }, (_, index) => evidence(`pdf-page-${index}`, `Page ${index + 1}`, 'No native text'))
+            ? Array.from({ length: Math.min(pageCount, 8) }, (_, index) => evidence(`pdf-page-${index}`, `Page ${index + 1}`, 'No native text', { type: 'page', label: `Page ${index + 1}`, page: index + 1 }))
             : [evidence('pdf-no-text', 'Extracted text', 'No extractable text found')]
     },
     {
@@ -324,7 +324,7 @@ export async function analyzePdfFile(file: InspectionFile, options: { signal: Ab
   }
   for (const row of ocrStatusItems) evidenceList.push(row);
   const ocrTextItems: Evidence[] = ocrPages.slice(0, 12).map((entry, index) =>
-    evidence(`pdf-ocr-page-${index}`, `Page ${entry.page}`, entry.text.slice(0, 6000))
+    evidence(`pdf-ocr-page-${index}`, `Page ${entry.page}`, entry.text.slice(0, 6000), { type: 'page', label: `Page ${entry.page}`, page: entry.page })
   );
   for (const row of ocrTextItems) evidenceList.push(row);
   if (ocrStatusItems.length) {

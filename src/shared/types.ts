@@ -26,10 +26,25 @@ export interface InspectionUrl {
 
 export type InspectionItem = InspectionFile | InspectionFolder | InspectionUrl;
 
+export interface EvidenceLocation {
+  /** What kind of object/region the evidence points to. */
+  type: 'file' | 'page' | 'row' | 'column' | 'cell' | 'line' | 'range' | 'json-path' | 'archive-entry' | 'object' | 'region';
+  /** Human-readable target, e.g. "Page 3", "row 12", "config.yml". */
+  label: string;
+  path?: string;
+  page?: number;
+  row?: number;
+  column?: number;
+  startLine?: number;
+  endLine?: number;
+}
+
 export interface Evidence {
   id: string;
   label: string;
   value: string;
+  /** Optional structural location. Never fabricated: only set when the analyzer knows it. */
+  location?: EvidenceLocation;
 }
 
 export type FindingMethodology = 'fact' | 'heuristic' | 'anomaly' | 'inference' | 'ml';
@@ -138,6 +153,16 @@ export interface HistoryEntry {
   summary: string;
   result: AnalysisResult;
   createdAt: number;
+  /** completed / failed / cancelled. */
+  status?: 'completed' | 'failed' | 'cancelled';
+  /** analysis wall-time in ms when known. */
+  durationMs?: number;
+  /** Whether local OCR contributed to this result. */
+  ocrUsed?: boolean;
+  /** Whether an LLM interpretation was attached to this result. */
+  llmUsed?: boolean;
+  /** True when the source object is known to be unavailable for reopen. */
+  sourceUnavailable?: boolean;
 }
 
 export interface AppSettings {
