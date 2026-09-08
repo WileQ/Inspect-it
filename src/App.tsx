@@ -1058,21 +1058,28 @@ export default function App() {
                         <div className="history-list">
                           {historyList.slice(0, 30).map((entry) => {
                             const summary = summarizeHistoryEntry(entry);
+                            const createdAt = new Date(entry.createdAt).toLocaleString();
+                            const objectType = entry.result?.identity?.type || 'file';
                             const badge = entry.status && entry.status !== 'completed' ? entry.status : 'completed';
                             return (
                               <div className="history-row" key={entry.id}>
-                                <button type="button" className="history-item" onClick={() => reopenHistory(entry)}>
+                                <button type="button" className="history-item" title="Open cached result (does not re-run analysis)" onClick={() => reopenHistory(entry)}>
                                   <span className="history-name">{entry.targetName}</span>
-                                  <span className="history-meta">{entry.analyzerName} - {entry.summary}</span>
+                                  <span className="history-meta">{entry.analyzerName} · {entry.summary}</span>
                                   <span className="history-sub">
-                                    {badge} ? {summary.findingCount} finding(s)
-                                    {summary.bySeverity.high ? ` ? ${summary.bySeverity.high} high` : ''}
-                                    {summary.bySeverity.medium ? ` ? ${summary.bySeverity.medium} medium` : ''}
-                                    {summary.ocrUsed ? ' ? OCR' : ''}
-                                    {summary.llmUsed ? ' ? AI' : ''}
-                                    {entry.sourceUnavailable ? ' ? source unavailable' : ''}
+                                    {createdAt} · {objectType} · {badge}
+                                    {summary.findingCount} finding(s)
+                                    {summary.bySeverity.high ? ` · ${summary.bySeverity.high} high` : ''}
+                                    {summary.bySeverity.medium ? ` · ${summary.bySeverity.medium} medium` : ''}
+                                    {summary.ocrUsed ? ' · OCR' : ''}
+                                    {summary.llmUsed ? ' · AI' : ''}
+                                    {entry.sourceUnavailable ? ' · source unavailable' : ''}
+                                    · cached (no re-run)
                                   </span>
                                 </button>
+                                {entry.result?.objectKind === 'url' ? (
+                                  <button type="button" className="history-reanalyze" title="Re-analyze this URL" onClick={(event) => { event.stopPropagation(); void inspectUrl(entry.result ? entry.result.identity.location : entry.targetName); }}>?</button>
+                                ) : null}
                                 <button type="button" className="history-delete" title="Delete entry" aria-label="Delete history entry" onClick={() => removeEntry(entry.id)}>?</button>
                               </div>
                             );

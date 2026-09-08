@@ -23,25 +23,29 @@ function identity(url: URL, fingerprint: string): AnalysisResult['identity'] {
   };
 }
 
-function headersEvidence(headers: Headers): Evidence[] {
+function securityHeaderValue(outcome: WebFetchOk, key: 'csp' | 'xfo' | 'hsts' | 'referrer' | 'permissions' | 'nosniff'): string {
+  const value = outcome.headers ? outcome.headers[key] : undefined;
+  return value && value.trim() ? value : 'Not present';
+}
+
+function headersEvidence(outcome: WebFetchOk): Evidence[] {
   return [
-    evidence('web-header-csp', 'Content-Security-Policy', headers.get('content-security-policy') || 'Not present'),
-    evidence('web-header-xfo', 'X-Frame-Options', headers.get('x-frame-options') || 'Not present'),
-    evidence('web-header-hsts', 'Strict-Transport-Security', headers.get('strict-transport-security') || 'Not present'),
-    evidence('web-header-referrer', 'Referrer-Policy', headers.get('referrer-policy') || 'Not present'),
-    evidence('web-header-permissions', 'Permissions-Policy', headers.get('permissions-policy') || 'Not present'),
-    evidence('web-header-nosniff', 'X-Content-Type-Options', headers.get('x-content-type-options') || 'Not present')
+    evidence('web-header-csp', 'Content-Security-Policy', securityHeaderValue(outcome, 'csp')),
+    evidence('web-header-xfo', 'X-Frame-Options', securityHeaderValue(outcome, 'xfo')),
+    evidence('web-header-hsts', 'Strict-Transport-Security', securityHeaderValue(outcome, 'hsts')),
+    evidence('web-header-referrer', 'Referrer-Policy', securityHeaderValue(outcome, 'referrer')),
+    evidence('web-header-permissions', 'Permissions-Policy', securityHeaderValue(outcome, 'permissions')),
+    evidence('web-header-nosniff', 'X-Content-Type-Options', securityHeaderValue(outcome, 'nosniff'))
   ];
 }
 
 async function readBoundedBody(response: Response, limitBytes: number, signal: AbortSignal): Promise<{ text: string; bytes: Uint8Array; truncated: boolean }> {
-  const contentType = response.headers.get('content-type') || 'text/plain';
   if (!response.body) {
     const bytes = new Uint8Array(await response.arrayBuffer());
     const sliced = bytes.slice(0, limitBytes);
     return {
       bytes: sliced,
-      text: new TextDecoder(contentType.includes('charset=utf-8') ? 'utf-8' : 'utf-8', { fatal: false }).decode(sliced),
+      text: new TextDecoder('utf-8', { fatal: false }).decode(sliced),
       truncated: bytes.length > limitBytes
     };
   }
@@ -109,10 +113,10 @@ function parseStructuredData(html: string): number {
   return count;
 }
 
-function parseSecurityTechnologies(headers: Headers, html: string): string[] {
+function parseSecurityTechnologies(outcome: WebFetchOk, html: string): string[] {
   const tech = new Set<string>();
-  const server = headers.get('server');
-  const poweredBy = headers.get('x-powered-by');
+  const server = outcome.headers?.server;
+  const poweredBy = outcome.headers?.xPoweredBy;
   const generator = html.match(/<meta[^>]*name=["']generator["'][^>]*content=["']([^"']+)["']/i)?.[1];
   if (server) tech.add(server);
   if (poweredBy) tech.add(poweredBy);
@@ -124,41 +128,164 @@ function parseSecurityTechnologies(headers: Headers, html: string): string[] {
   return [...tech];
 }
 
-async function fetchWithTimeout(url: URL, signal: AbortSignal, timeoutMs: number): Promise<Response> {
+/* ------------------------------------------------------------------ */
+/* Bounded, categorized web fetching                                   */
+/*                                                                     */
+/* Desktop (Electron) fetches in the MAIN process via the IPC bridge   */
+/* (`window.inspectItDesktop.web.fetch`) so GitHub and other CORS-     */
+/* restricted sites work. Browser/tests fall back to the global fetch. */
+/* ------------------------------------------------------------------ */
+
+export type WebFetchFailureCategory = 'dns' | 'connection' | 'tls' | 'timeout' | 'redirect' | 'http' | 'aborted' | 'network' | 'unknown';
+
+export interface WebFetchOk {
+  ok: true;
+  requestedUrl: string;
+  finalUrl: string;
+  status: number;
+  statusText: string;
+  redirected: boolean;
+  redirectCount: number;
+  contentType: string;
+  size: number;
+  truncated: boolean;
+  text: string;
+  durationMs: number;
+  /** Minimal security-relevant headers surfaced by the fetch layer. */
+  headers?: {
+    csp?: string; xfo?: string; hsts?: string; referrer?: string; permissions?: string; nosniff?: string;
+    server?: string; xPoweredBy?: string;
+  };
+}
+
+export interface WebFetchError {
+  ok: false;
+  category: WebFetchFailureCategory;
+  message: string;
+  requestedUrl: string;
+  status?: number;
+  durationMs: number;
+}
+
+export type WebFetchOutcome = WebFetchOk | WebFetchError;
+
+/** Map a fetch exception to a stable failure category. */
+export function classifyFetchError(error: unknown): { category: WebFetchFailureCategory; message: string } {
+  const cause = (error as { cause?: { code?: string; message?: string } })?.cause;
+  const code = String(cause?.code ?? (error as { code?: string })?.code ?? '');
+  const message = cause?.message || (error instanceof Error ? error.message : String(error));
+  if ((error as Error)?.name === 'AbortError' || /aborted/i.test(message) || code === 'ABORT_ERR') {
+    return { category: 'aborted', message: 'Request was aborted or timed out.' };
+  }
+  if (/timed? ?out|ETIMEDOUT|timeout/i.test(message) || code === 'ETIMEDOUT' || code === 'UND_ERR_CONNECT_TIMEOUT') {
+    return { category: 'timeout', message: 'The request timed out.' };
+  }
+  if (/ENOTFOUND|EAI_AGAIN|dns/i.test(message) || code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
+    return { category: 'dns', message: 'The host could not be resolved (DNS failure).' };
+  }
+  if (/ECONNREFUSED|ECONNRESET|EADDRNOTAVAIL|EHOSTUNREACH|ENETUNREACH|socket/i.test(message) || /ECONNREFUSED|ECONNRESET/.test(code)) {
+    return { category: 'connection', message: 'The connection could not be established.' };
+  }
+  if (/tls|ssl|certificate|cert/i.test(message) || /TLS|SSL|CERT/.test(code)) {
+    return { category: 'tls', message: 'The TLS/SSL handshake or certificate verification failed.' };
+  }
+  if (/redirect|too many redirects/i.test(message)) {
+    return { category: 'redirect', message: 'The redirect chain failed.' };
+  }
+  return { category: 'network', message: message || 'Network request failed.' };
+}
+
+function desktopWebBridge(): { fetch(payload: { url: string; timeoutMs?: number }): Promise<WebFetchOutcome> } | null {
+  if (typeof window === 'undefined') return null;
+  const bridge = (window as unknown as { inspectItDesktop?: { web?: { fetch(payload: { url: string; timeoutMs?: number }): Promise<WebFetchOutcome> } } }).inspectItDesktop?.web;
+  return bridge?.fetch ? bridge : null;
+}
+
+async function fetchViaGlobal(url: URL, signal: AbortSignal, timeoutMs: number): Promise<WebFetchOutcome> {
+  const started = Date.now();
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const timeout = setTimeout(() => controller.abort(new DOMException('Timeout', 'TimeoutError')), timeoutMs);
   const abort = () => controller.abort();
   signal.addEventListener('abort', abort, { once: true });
   try {
-    return await fetch(url, {
+    const response = await fetch(url, {
       signal: controller.signal,
       redirect: 'follow',
       headers: {
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'User-Agent': 'Inspect It/1.0.4 (+https://github.com/WileQ/Inspect-it)'
       }
     });
+    const contentType = response.headers.get('content-type') || '';
+    const body = await readBoundedBody(response, 1024 * 1024, signal);
+    return {
+      ok: true,
+      requestedUrl: url.href,
+      finalUrl: response.url || url.href,
+      status: response.status,
+      statusText: response.statusText,
+      redirected: response.redirected,
+      redirectCount: response.redirected ? 1 : 0,
+      contentType,
+      size: body.bytes.length,
+      truncated: body.truncated,
+      text: body.text,
+      durationMs: Date.now() - started,
+      headers: {
+        csp: response.headers.get('content-security-policy') || undefined,
+        xfo: response.headers.get('x-frame-options') || undefined,
+        hsts: response.headers.get('strict-transport-security') || undefined,
+        referrer: response.headers.get('referrer-policy') || undefined,
+        permissions: response.headers.get('permissions-policy') || undefined,
+        nosniff: response.headers.get('x-content-type-options') || undefined,
+        server: response.headers.get('server') || undefined,
+        xPoweredBy: response.headers.get('x-powered-by') || undefined
+      }
+    };
+  } catch (error) {
+    if ((error as Error)?.name === 'AbortError' && signal.aborted) {
+      throw error;
+    }
+    const classified = classifyFetchError(error);
+    return { ok: false, category: classified.category, message: classified.message, requestedUrl: url.href, durationMs: Date.now() - started };
   } finally {
     clearTimeout(timeout);
     signal.removeEventListener('abort', abort);
   }
 }
 
-async function safeFetchText(url: URL, signal: AbortSignal): Promise<string> {
-  try {
-    const response = await fetchWithTimeout(url, signal, 6000);
-    if (!response.ok) return '';
-    const { text } = await readBoundedBody(response, 256 * 1024, signal);
-    return text;
-  } catch {
-    return '';
+/** Fetch a single page, bounded, with the desktop main-process bridge when present. */
+export async function fetchWebPage(url: URL, signal: AbortSignal, timeoutMs = 10000): Promise<WebFetchOutcome> {
+  ensureNotAborted(signal);
+  const bridge = desktopWebBridge();
+  if (bridge) {
+    const started = Date.now();
+    try {
+      const outcome = await bridge.fetch({ url: url.href, timeoutMs });
+      return outcome && typeof outcome.ok === 'boolean' ? outcome : { ok: false, category: 'network', message: 'The fetch bridge returned an invalid response.', requestedUrl: url.href, durationMs: Date.now() - started };
+    } catch (error) {
+      const classified = classifyFetchError(error);
+      return { ok: false, category: classified.category, message: classified.message, requestedUrl: url.href, durationMs: Date.now() - started };
+    }
   }
+  return fetchViaGlobal(url, signal, timeoutMs);
 }
 
-async function webFailureResult(item: InspectionUrl, fingerprint: string, message: string): Promise<AnalysisResult> {
+function webFailureResult(item: InspectionUrl, fingerprint: string, error: WebFetchError): AnalysisResult {
   const evidenceList: Evidence[] = [
-    evidence('web-url', 'URL', item.url),
-    evidence('web-error', 'Request failed', message)
+    evidence('web-url', 'Requested URL', error.requestedUrl),
+    evidence('web-error-category', 'Failure category', error.category),
+    evidence('web-error', 'Request failed', error.message)
   ];
+  if (typeof error.status === 'number') {
+    evidenceList.push(evidence('web-status', 'HTTP status', String(error.status)));
+  }
+  if (error.durationMs !== undefined) {
+    evidenceList.push(evidence('web-duration', 'Fetch duration', `${error.durationMs} ms`));
+  }
+  const summary = error.status !== undefined
+    ? `The server responded with HTTP ${error.status}; content was not analyzed.`
+    : error.message;
   return {
     objectKind: 'url',
     analyzerId: 'web',
@@ -177,7 +304,7 @@ async function webFailureResult(item: InspectionUrl, fingerprint: string, messag
     },
     sections: [{ id: 'web-facts', title: 'Facts', items: evidenceList }],
     important: [],
-    unusual: [finding('web-unreachable', 'Website unreachable', message, 'high', ['web-error'])],
+    unusual: [finding('web-unreachable', 'Website unreachable', summary, 'high', ['web-error'])],
     recommendations: [],
     evidence: evidenceList,
     progressLabel: 'Website analysis failed',
@@ -185,6 +312,12 @@ async function webFailureResult(item: InspectionUrl, fingerprint: string, messag
     generatedAt: new Date().toISOString(),
     sourceSummary: 'Unreachable'
   };
+}
+
+async function safeFetchText(url: URL, signal: AbortSignal): Promise<string> {
+  const outcome = await fetchWebPage(url, signal, 6000);
+  if (!outcome.ok || outcome.status !== 200) return '';
+  return outcome.text.slice(0, 256 * 1024);
 }
 
 export async function analyzeUrlItem(item: InspectionUrl, options: { signal: AbortSignal }): Promise<AnalysisResult> {
@@ -199,22 +332,27 @@ export async function analyzeUrlItem(item: InspectionUrl, options: { signal: Abo
     throw new Error('Only http and https URLs can be inspected');
   }
   const fingerprint = await digestHex(new TextEncoder().encode(url.href));
-  let response: Response;
-  try {
-    response = await fetchWithTimeout(url, options.signal, 10000);
-  } catch (error) {
-    const message = error instanceof Error && error.name !== 'AbortError' ? error.message : 'Request failed or timed out';
-    if ((error as Error)?.name === 'AbortError') {
-      throw error;
-    }
-    return webFailureResult(item, fingerprint, message);
+  const outcome = await fetchWebPage(url, options.signal, 10000);
+  if (!outcome.ok) {
+    return webFailureResult(item, fingerprint, outcome);
   }
-  const contentType = response.headers.get('content-type') || '';
-  const body = await readBoundedBody(response, 1024 * 1024, options.signal);
+  if (outcome.status >= 400) {
+    // HTTP error: report it clearly; never produce content findings from the error page.
+    return webFailureResult(item, fingerprint, {
+      ok: false,
+      category: 'http',
+      message: `The server responded with HTTP ${outcome.status} ${outcome.statusText.trim()}.`,
+      requestedUrl: outcome.requestedUrl,
+      status: outcome.status,
+      durationMs: outcome.durationMs
+    });
+  }
+  const contentType = outcome.contentType || '';
   const isHtml = /html/i.test(contentType);
   const isXml = /xml/i.test(contentType);
   const looksTextual = /text|json|javascript|svg/i.test(contentType);
-  const html = (isHtml || isXml || looksTextual) ? body.text : '';
+  const extractionStatus = (isHtml || isXml || looksTextual) ? (outcome.truncated ? 'parsed (truncated)' : 'parsed') : 'not parsed (non-textual content)';
+  const html = (isHtml || isXml || looksTextual) ? outcome.text : '';
   const title = parseTitle(html);
   const headings = extractHeadingsFromHtml(html);
   const links = extractLinksFromHtml(html);
@@ -224,8 +362,8 @@ export async function analyzeUrlItem(item: InspectionUrl, options: { signal: Abo
   const lang = parseLang(html);
   const structuredDataCount = parseStructuredData(html);
   const meta = parseMetaTags(html);
-  const technologies = parseSecurityTechnologies(response.headers, html);
-  const securityHeaders = headersEvidence(response.headers);
+  const technologies = parseSecurityTechnologies(outcome, html);
+  const securityHeaders = headersEvidence(outcome);
   const robotsUrl = new URL('/robots.txt', url);
   const sitemapUrl = new URL('/sitemap.xml', url);
   const robotsText = await safeFetchText(robotsUrl, options.signal);
@@ -233,8 +371,14 @@ export async function analyzeUrlItem(item: InspectionUrl, options: { signal: Abo
   const robotsLines = robotsText ? robotsText.split(/\r\n|\n|\r/).filter(Boolean) : [];
   const sitemapEntries = sitemapText ? (parseXml(sitemapText) as Record<string, unknown>) : {};
   const evidenceList: Evidence[] = [
-    evidence('web-url', 'URL', url.href),
-    evidence('web-status', 'HTTP status', `${response.status} ${response.statusText}`.trim()),
+    evidence('web-url', 'Requested URL', outcome.requestedUrl),
+    evidence('web-final-url', 'Final URL', outcome.finalUrl !== outcome.requestedUrl ? outcome.finalUrl : 'Same as requested'),
+    evidence('web-status', 'HTTP status', `${outcome.status} ${outcome.statusText}`.trim()),
+    evidence('web-content-type', 'Content type', contentType || 'Not provided'),
+    evidence('web-size', 'Response size', `${formatNumber(outcome.size)} bytes${outcome.truncated ? ' (truncated)' : ''}`),
+    evidence('web-redirects', 'Redirects', formatNumber(outcome.redirectCount)),
+    evidence('web-duration', 'Fetch duration', `${outcome.durationMs} ms`),
+    evidence('web-extraction', 'Extraction', extractionStatus),
     evidence('web-title', 'Title', title || 'Not present'),
     evidence('web-description', 'Description', meta.description || 'Not present'),
     evidence('web-headings', 'Headings', formatNumber(headings.length)),
@@ -272,7 +416,7 @@ export async function analyzeUrlItem(item: InspectionUrl, options: { signal: Abo
   }
   const unusual: Finding[] = [];
   if (!isHtml && !isXml) {
-    unusual.push(finding('web-non-html', 'Non-HTML response', 'The endpoint did not return an HTML document, so only headers and the raw response were inspected.', 'info', ['web-status']));
+    unusual.push(finding('web-non-html', 'Non-HTML response', 'The endpoint did not return an HTML document, so only headers and the raw response were inspected.', 'info', ['web-content-type']));
   }
   if (!title && isHtml) {
     unusual.push(finding('web-no-title', 'Missing title', 'The page does not define a document title.', 'low', ['web-title']));
@@ -280,15 +424,12 @@ export async function analyzeUrlItem(item: InspectionUrl, options: { signal: Abo
   if (!headings.length && isHtml) {
     unusual.push(finding('web-no-headings', 'No headings detected', 'The page appears to have no visible heading structure.', 'low', ['web-headings']));
   }
-  if (body.truncated) {
-    unusual.push(finding('web-truncated', 'Response truncated', 'Only a bounded portion of the response body was analyzed.', 'info', ['web-status']));
+  if (outcome.truncated) {
+    unusual.push(finding('web-truncated', 'Response truncated', 'Only a bounded portion of the response body was analyzed.', 'info', ['web-size']));
   }
   const recommendations: Finding[] = [];
   if (!canonical && isHtml) {
     recommendations.push(finding('web-canonical-reco', 'Add canonical URL', 'The page does not declare a canonical URL.', 'low', ['web-canonical']));
-  }
-  if (!response.headers.get('content-security-policy')) {
-    recommendations.push(finding('web-csp-reco', 'Consider a content security policy', 'No Content-Security-Policy header was detected.', 'low', ['web-header-csp']));
   }
   return {
     objectKind: 'url',

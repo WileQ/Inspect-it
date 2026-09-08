@@ -409,6 +409,7 @@ app.whenReady().then(() => {
   createTray();
   registerAiIpc();
   registerOcrIpc();
+  registerWebIpc();
 
   ipcMain.handle('inspect-it:get-window-state', () => ({
     expanded,
@@ -781,6 +782,98 @@ async function runOcr(bytes) {
   } catch (error) {
     return { ok: false, message: error instanceof Error ? error.message : 'OCR failed' };
   }
+}
+
+const WEB_UA = 'Inspect It/1.0.4 (+https://github.com/WileQ/Inspect-it)';
+
+function classifyWebError(error) {
+  const cause = (error && error.cause) || error || {};
+  const code = String(cause.code || '');
+  const message = String(cause.message || (error && error.message) || '');
+  if (/timed? ?out|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT/i.test(message) || code === 'ETIMEDOUT') return { category: 'timeout', message: 'The request timed out.' };
+  if (/ENOTFOUND|EAI_AGAIN|dns/i.test(message) || code === 'ENOTFOUND' || code === 'EAI_AGAIN') return { category: 'dns', message: 'The host could not be resolved (DNS failure).' };
+  if (/ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENETUNREACH/i.test(message) || /ECONNREFUSED|ECONNRESET/.test(code)) return { category: 'connection', message: 'The connection could not be established.' };
+  if (/tls|ssl|certificate|cert/i.test(message) || /TLS|SSL|CERT/.test(code)) return { category: 'tls', message: 'The TLS/SSL handshake or certificate verification failed.' };
+  if (/redirect/i.test(message)) return { category: 'redirect', message: 'The redirect chain failed.' };
+  return { category: 'network', message: message || 'Network request failed.' };
+}
+
+async function fetchWeb(payload) {
+  const started = Date.now();
+  const raw = typeof payload?.url === 'string' ? payload.url : '';
+  const finish = (outcome) => ({ ...outcome, durationMs: Date.now() - started });
+  let url;
+  try { url = new URL(raw); } catch { return finish({ ok: false, category: 'unknown', message: 'Invalid URL.', requestedUrl: raw }); }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    return finish({ ok: false, category: 'unknown', message: 'Only http and https URLs can be inspected.', requestedUrl: url.href });
+  }
+  const timeoutMs = Math.min(Math.max(Number(payload?.timeoutMs) || 10000, 1000), 20000);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error('timeout')), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      redirect: 'follow',
+      headers: { Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8', 'User-Agent': WEB_UA }
+    });
+    const contentType = response.headers.get('content-type') || '';
+    const contentLength = Number(response.headers.get('content-length') || 0);
+    const limit = 1024 * 1024;
+    const chunks = [];
+    let total = 0;
+    let truncated = false;
+    if (response.body) {
+      const reader = response.body.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+        if (total + value.length > limit) {
+          const remaining = limit - total;
+          if (remaining > 0) chunks.push(Buffer.from(value).subarray(0, remaining));
+          total += remaining;
+          truncated = true;
+          break;
+        }
+        chunks.push(Buffer.from(value));
+        total += value.length;
+      }
+    }
+    const size = Number.isFinite(contentLength) && contentLength > 0 && !truncated ? contentLength : total + (truncated ? 1 : 0);
+    const text = Buffer.concat(chunks).toString('utf8');
+    return finish({
+      ok: true,
+      requestedUrl: url.href,
+      finalUrl: response.url || url.href,
+      status: response.status,
+      statusText: response.statusText,
+      redirected: Boolean(response.redirected),
+      redirectCount: response.redirected ? 1 : 0,
+      contentType,
+      size,
+      truncated,
+      text,
+      headers: {
+        csp: response.headers.get('content-security-policy') || undefined,
+        xfo: response.headers.get('x-frame-options') || undefined,
+        hsts: response.headers.get('strict-transport-security') || undefined,
+        referrer: response.headers.get('referrer-policy') || undefined,
+        permissions: response.headers.get('permissions-policy') || undefined,
+        nosniff: response.headers.get('x-content-type-options') || undefined,
+        server: response.headers.get('server') || undefined,
+        xPoweredBy: response.headers.get('x-powered-by') || undefined
+      }
+    });
+  } catch (error) {
+    const classified = classifyWebError(error);
+    return finish({ ok: false, category: classified.category, message: classified.message, requestedUrl: url.href });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function registerWebIpc() {
+  ipcMain.handle('inspect-it:web-fetch', (_event, payload) => fetchWeb(payload));
 }
 
 function registerOcrIpc() {

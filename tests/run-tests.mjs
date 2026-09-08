@@ -12,6 +12,7 @@ import { runProductionTests } from './production.mjs';
 import { runMilestoneSixTests } from './milestone06.mjs';
 import { runMilestoneSevenTests } from './milestone07.mjs';
 import { runMilestoneEightTests } from './milestone08.mjs';
+import { runGoldenTests } from './golden.mjs';
 
 const root = process.cwd();
 const fixturePath = (name) => path.join(root, 'tests', 'fixtures', name);
@@ -160,6 +161,7 @@ async function main() {
   await runMilestoneSixTests();
   await runMilestoneSevenTests();
   await runMilestoneEightTests();
+  await runGoldenTests();
   console.log('All Inspect It tests passed.');
 }
 

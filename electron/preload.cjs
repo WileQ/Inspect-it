@@ -19,6 +19,9 @@ contextBridge.exposeInMainWorld('inspectItDesktop', {
   ocr: {
     run: (bytes) => ipcRenderer.invoke('inspect-it:ocr', bytes)
   },
+  web: {
+    fetch: (payload) => ipcRenderer.invoke('inspect-it:web-fetch', payload)
+  },
   ai: {
     chat: (payload) => ipcRenderer.invoke('inspect-it:ai-chat', payload),
     abort: (requestId) => ipcRenderer.invoke('inspect-it:ai-abort', requestId),

@@ -1458,7 +1458,7 @@ button {
 }
 .history-row {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 1fr auto auto;
   gap: 6px;
   align-items: stretch;
 }
@@ -1492,3 +1492,18 @@ button {
 }
 .history-delete:hover { background: rgba(255, 130, 130, 0.12); }
 .history-empty { padding: 10px 2px; }
+.history-reanalyze {
+  background: transparent;
+  border: 1px solid rgba(140, 200, 150, 0.35);
+  color: #8cc896;
+  border-radius: 9px;
+  width: 30px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.history-reanalyze:hover { background: rgba(140, 200, 150, 0.12); }
+.evidence-chip-button:focus-visible {
+  outline: 2px solid rgba(255, 183, 91, 0.7);
+  outline-offset: 1px;
+}
