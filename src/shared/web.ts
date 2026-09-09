@@ -217,7 +217,7 @@ async function fetchViaGlobal(url: URL, signal: AbortSignal, timeoutMs: number):
       redirect: 'follow',
       headers: {
         Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'User-Agent': 'Inspect It/1.0.4 (+https://github.com/WileQ/Inspect-it)'
+        'User-Agent': 'Inspect It/1.0.5 (+https://github.com/WileQ/Inspect-it)'
       }
     });
     const contentType = response.headers.get('content-type') || '';

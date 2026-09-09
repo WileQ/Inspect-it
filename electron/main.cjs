@@ -784,7 +784,7 @@ async function runOcr(bytes) {
   }
 }
 
-const WEB_UA = 'Inspect It/1.0.4 (+https://github.com/WileQ/Inspect-it)';
+const WEB_UA = 'Inspect It/1.0.5 (+https://github.com/WileQ/Inspect-it)';
 let webFetchRegistered = false;
 const webDebug = (...args) => { if (process.env.INSPECT_IT_WEB_DEBUG === '1') console.error('[web-debug]', ...args); };
 
