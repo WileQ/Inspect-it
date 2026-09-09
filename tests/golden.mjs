@@ -214,5 +214,24 @@ export async function runGoldenTests() {
     }
   }
 
+  // --- Credential URLs are rejected without any network ----------------------
+  {
+    let calls = 0;
+    const prevFetch = globalThis.fetch;
+    const prevWindow = globalThis.window;
+    globalThis.fetch = async () => { calls += 1; throw new Error('must not fetch'); };
+    globalThis.window = undefined;
+    try {
+      const result = await analyzeItem(urlItem('https://user:secret@example.com/'), { signal });
+      const category = (result.evidence || []).find((entry) => entry.id === 'web-error-category');
+      assert.equal(category?.value, 'unknown', 'credential URL rejected before transport');
+      assert.ok((result.evidence || []).some((entry) => entry.id === 'web-error' && String(entry.value).includes('credentials')), 'credential rejection explained');
+      assert.equal(calls, 0, 'no network for credential URLs');
+    } finally {
+      if (prevFetch === undefined) delete globalThis.fetch; else globalThis.fetch = prevFetch;
+      if (prevWindow === undefined) delete globalThis.window; else globalThis.window = prevWindow;
+    }
+  }
+
   console.log('Golden real-world regression tests passed.');
 }

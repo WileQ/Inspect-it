@@ -416,6 +416,16 @@ export async function analyzeUrlItem(item: InspectionUrl, options: { signal: Abo
   if (!isUrl(url.href)) {
     throw new Error('Only http and https URLs can be inspected');
   }
+  if (url.username || url.password) {
+    const credError: WebFetchError = {
+      ok: false,
+      category: 'unknown',
+      message: 'URLs with embedded credentials are not allowed.',
+      requestedUrl: url.href,
+      durationMs: 0
+    };
+    return webFailureResult(item, await digestHex(new TextEncoder().encode(url.href)), credError);
+  }
   const fingerprint = await digestHex(new TextEncoder().encode(url.href));
   const settings = loadSettings();
   if (!settings.webAnalysisEnabled) {

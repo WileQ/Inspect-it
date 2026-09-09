@@ -801,6 +801,7 @@ function classifyWebError(error) {
 }
 
 async function fetchWeb(payload) {
+  const webguard = require('./webguard.cjs');
   const started = Date.now();
   const raw = typeof payload?.url === 'string' ? payload.url : '';
   webDebug('request', JSON.stringify({ url: raw, timeoutMs: payload?.timeoutMs }));
@@ -810,15 +811,46 @@ async function fetchWeb(payload) {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     return finish({ ok: false, category: 'unknown', message: 'Only http and https URLs can be inspected.', requestedUrl: url.href });
   }
+  if (webguard.hasUserinfo(url)) {
+    return finish({ ok: false, category: 'unknown', message: 'URLs with embedded credentials are not allowed.', requestedUrl: url.href });
+  }
   const timeoutMs = Math.min(Math.max(Number(payload?.timeoutMs) || 10000, 1000), 20000);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error('timeout')), timeoutMs);
   try {
-    const response = await fetch(url, {
-      signal: controller.signal,
-      redirect: 'follow',
-      headers: { Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8', 'User-Agent': WEB_UA }
-    });
+    let current = url;
+    let redirects = 0;
+    let response;
+    while (true) {
+      const hopController = new AbortController();
+      const hopTimer = setTimeout(() => hopController.abort(new Error('timeout')), timeoutMs);
+      try {
+        response = await fetch(current, {
+          signal: hopController.signal,
+          redirect: 'manual',
+          headers: { Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8', 'User-Agent': WEB_UA }
+        });
+      } finally {
+        clearTimeout(hopTimer);
+      }
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get('location');
+        if (!location) break;
+        if (redirects >= 5) {
+          return finish({ ok: false, category: 'redirect', message: 'Too many redirects (limit 5).', requestedUrl: url.href });
+        }
+        let next;
+        try { next = new URL(location, current); } catch { break; }
+        const allowed = webguard.validateRedirectTarget(current, next);
+        if (!allowed.ok) {
+          return finish({ ok: false, category: 'redirect', message: allowed.reason, requestedUrl: url.href });
+        }
+        current = next;
+        redirects += 1;
+        continue;
+      }
+      break;
+    }
     const contentType = response.headers.get('content-type') || '';
     const contentLength = Number(response.headers.get('content-length') || 0);
     const limit = 1024 * 1024;
@@ -851,8 +883,8 @@ async function fetchWeb(payload) {
       finalUrl: response.url || url.href,
       status: response.status,
       statusText: response.statusText,
-      redirected: Boolean(response.redirected),
-      redirectCount: response.redirected ? 1 : 0,
+      redirected: redirects > 0,
+      redirectCount: redirects,
       contentType,
       size,
       truncated,
