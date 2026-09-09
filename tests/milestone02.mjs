@@ -1,6 +1,7 @@
 ﻿// Milestone 02 analyzer tests. Uses real, in-memory fixtures (no network).
 import assert from 'node:assert/strict';
 import { analyzeItem } from '../src/shared/analyzers.ts';
+import { loadSettings, saveSettings } from '../src/shared/history.ts';
 import {
   makeZipItem,
   makeTarItem,
@@ -316,6 +317,7 @@ export async function runMilestoneTwoTests() {
   }
 
   // --- Website (local mock server) ---
+    saveSettings({ ...loadSettings(), webAnalysisEnabled: true });
   {
     const server = await startMockWebServer();
     try {
@@ -339,6 +341,7 @@ export async function runMilestoneTwoTests() {
     assert.equal(hasFinding(unreachable, 'web-unreachable'), true, 'web unreachable handled gracefully');
   }
 
+    saveSettings({ ...loadSettings(), webAnalysisEnabled: false });
   // --- Git repository signals (synthetic .git) ---
   {
     const result = await analyzeItem(makeGitFolderItem(), { signal });

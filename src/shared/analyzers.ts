@@ -376,9 +376,12 @@ async function analyzeJsonFile(file: InspectionFile, bytes: Uint8Array, options:
   }
   options.onProgress?.({ completed: 4, total: 5, step: 'Deriving structural evidence' });
   const topKeys = sortDescending([...keyCounts.entries()]).slice(0, 8);
-  const topKeysEvidence = topKeys.map(([key, count], index) =>
-    createEvidence(`json-key-${index}`, `Key ${index + 1}`, `${key} appears ${count} times`)
-  );
+  const jsonKeyPath = (key: string): string => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? `$.${key}` : `$[${JSON.stringify(key)}]`;
+  const topKeysEvidence = topKeys.map(([key, count], index) => {
+    const base = createEvidence(`json-key-${index}`, `Key ${index + 1}`, `${key} appears ${count} times`);
+    const path = jsonKeyPath(key);
+    return { ...base, location: { type: 'json-path' as const, label: path, path } };
+  });
   evidence.push(
     createEvidence('json-root', 'Root type', rootType),
     createEvidence('json-objects', 'Objects', formatNumber(objectCount)),
@@ -559,6 +562,13 @@ async function analyzeCsvFile(file: InspectionFile, bytes: Uint8Array, options: 
       createEvidence(`csv-stat-${index}-sd`, `${column.name} stdev`, sd.toFixed(3))
     ];
   });
+  statsEvidence.forEach((entry) => {
+    const mm = entry.id.match(/^csv-stat-(\d+)-/);
+    if (mm) {
+      const col = columns[Number(mm[1])];
+      if (col) entry.location = { type: 'column' as const, label: `${col.name} (column ${Number(mm[1]) + 1})`, column: Number(mm[1]), columnIndex: Number(mm[1]) };
+    }
+  });
   const outlierEvidence = columns.flatMap((column, index) => {
     const numericValues = column.values.map(toNumber).filter((value): value is number => value !== null);
     if (numericValues.length < 4) {
@@ -575,6 +585,13 @@ async function analyzeCsvFile(file: InspectionFile, bytes: Uint8Array, options: 
     }
     return [createEvidence(`csv-outlier-${index}`, `${column.name} outliers`, `${outliers.length} value(s) outside the IQR fence`)];
   });
+  outlierEvidence.forEach((entry) => {
+    const mm = entry.id.match(/^csv-outlier-(\d+)/);
+    if (mm) {
+      const col = columns[Number(mm[1])];
+      if (col) entry.location = { type: 'column' as const, label: `${col.name} (column ${Number(mm[1]) + 1})`, column: Number(mm[1]), columnIndex: Number(mm[1]) };
+    }
+  });
   const columnTypes = columns.map((column, index) => {
     const type = inferColumnType(column.values);
     const missing = column.values.filter((value) => value.trim().length === 0).length;
@@ -583,6 +600,13 @@ async function analyzeCsvFile(file: InspectionFile, bytes: Uint8Array, options: 
       column.name,
       `${type}, ${formatNumber(missing)} missing, ${formatNumber(new Set(column.values.filter((value) => value.trim().length > 0)).size)} unique`
     );
+  });
+  columnTypes.forEach((entry) => {
+    const mm = entry.id.match(/^csv-col-(\d+)/);
+    if (mm) {
+      const col = columns[Number(mm[1])];
+      if (col) entry.location = { type: 'column' as const, label: `${col.name} (column ${Number(mm[1]) + 1})`, column: Number(mm[1]), columnIndex: Number(mm[1]) };
+    }
   });
   options.onProgress?.({ completed: 4, total: 5, step: 'Deriving statistics' });
   const evidence: Evidence[] = [
@@ -598,7 +622,11 @@ async function analyzeCsvFile(file: InspectionFile, bytes: Uint8Array, options: 
   }
   if (duplicateExample) {
     const example = duplicateExample[0].split('\u0001').slice(0, 4).join('", "');
-    evidence.push(createEvidence('csv-duplicate-example', 'Duplicate example', `row ${duplicateExample[1].indices[0] + 2}: "${example}" repeats ${duplicateExample[1].count} times`));
+    {
+      const dupRow = duplicateExample[1].indices[0] + 2;
+      const rowEvidence = createEvidence('csv-duplicate-example', 'Duplicate example', `row ${dupRow}: "${example}" repeats ${duplicateExample[1].count} times`);
+      evidence.push({ ...rowEvidence, location: { type: 'row' as const, label: `row ${dupRow}`, row: dupRow } });
+    }
   }
   // Columns whose values are identical to another column.
   const columnSignatures = columns.map((column, index) => ({ index, name: column.name, signature: column.values.join('\u0001') }));

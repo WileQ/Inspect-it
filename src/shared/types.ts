@@ -35,8 +35,11 @@ export interface EvidenceLocation {
   page?: number;
   row?: number;
   column?: number;
+  columnIndex?: number;
   startLine?: number;
   endLine?: number;
+  /** Archive member path for archive-entry locations. */
+  entry?: string;
 }
 
 export interface Evidence {
@@ -177,4 +180,6 @@ export interface AppSettings {
   launchAtLogin?: boolean;
   /** Whether the first-launch onboarding card has been dismissed. */
   onboardingSeen?: boolean;
+  /** Explicit permission: URL/web analysis may open outbound connections. Default OFF. */
+  webAnalysisEnabled?: boolean;
 }

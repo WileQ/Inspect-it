@@ -1,3 +1,4 @@
+          <div className="settings-divider" />
 import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { AiReportSection } from './components/ai-report.tsx';
 import { AiSettingsSection } from './components/ai-settings.tsx';
@@ -404,6 +405,7 @@ export default function App() {
     try {
       const analyzed = await runInspection({
         target,
+        allowCache: target.kind === 'url' ? false : undefined,
         signal: controller.signal,
         onProgress: (next) => {
           setProgress(next);
@@ -611,6 +613,12 @@ export default function App() {
 
   const toggleSetting = (key: 'showHistory' | 'detailedReport') => {
     setSettings((current) => ({ ...current, [key]: !Boolean(current[key]) }));
+  };
+
+  const toggleWebAnalysis = () => {
+    const next = { ...settings, webAnalysisEnabled: !Boolean(settings.webAnalysisEnabled) };
+    setSettings(next);
+    saveSettings(next);
   };
 
   const toggleLaunchAtLogin = () => {
@@ -986,6 +994,15 @@ export default function App() {
                 <input type="checkbox" checked={Boolean(settings.launchAtLogin)} onChange={toggleLaunchAtLogin} />
               </label>
             ) : null}
+          </div>
+          <div className="settings-divider" />
+          <div className="settings-group">
+            <div className="settings-group-title">Web Analysis</div>
+            <label className="setting-row">
+              <span>Allow website analysis <em className="setting-state">{settings.webAnalysisEnabled ? 'On' : 'Off'}</em></span>
+              <input type="checkbox" checked={Boolean(settings.webAnalysisEnabled)} onChange={toggleWebAnalysis} />
+            </label>
+            <p className="settings-note">Inspecting a URL opens an outbound connection from this device. Default is Off; local file/folder analysis is unaffected. Only explicitly submitted URLs are ever fetched.</p>
           </div>
           <div className="settings-divider" />
           <div className="settings-group">

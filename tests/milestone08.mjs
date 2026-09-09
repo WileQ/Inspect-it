@@ -4,7 +4,7 @@ import { analyzeItem } from '../src/shared/analyzers.ts';
 import {
   appendHistory, clearHistory, loadHistory, removeHistoryEntry, searchHistory, sortHistory, summarizeHistoryEntry
 } from '../src/shared/history.ts';
-import { makeOcrTextItem, makePdfItem } from './fixtures.mjs';
+import { makeOcrTextItem, makePdfItem, makeZipItem } from './fixtures.mjs';
 
 const signal = new AbortController().signal;
 
@@ -92,6 +92,30 @@ export async function runMilestoneEightTests() {
     const ocr = image.evidence.find((entry) => entry.id === 'image-ocr');
     assert.ok(ocr && /HELLO/.test(String(ocr.value).toUpperCase()), 'OCR text used for a scanned-looking image');
     assert.ok(image.unusual.some((f) => f.id === 'image-ocr'), 'OCR finding present');
+  }
+
+  // --- Cheap evidence coordinates (CSV column/row, JSON path, archive entry) ---
+  {
+    const csvText = 'a,price\n1,10\n2,11\n3,9\n4,12\n5,9999\n6,10\n7,11\n8,9\n9,12\n';
+    const csv = await analyzeItem(textFileItem('prices.csv', csvText, 'text/csv'), { signal });
+    const stat = csv.evidence.find((entry) => entry.id === 'csv-stat-1-avg');
+    assert.ok(stat, 'csv stat evidence for price column');
+    assert.equal(stat.location?.type, 'column', 'csv column location attached');
+    assert.equal(stat.location?.columnIndex, 1, 'csv column index attached');
+    const dupCsv = await analyzeItem(textFileItem('dup.csv', 'a,b\n1,2\n1,2\n3,4\n'), { signal });
+    const dupExample = dupCsv.evidence.find((entry) => entry.id === 'csv-duplicate-example');
+    assert.ok(dupExample && dupExample.location?.type === 'row', 'csv duplicate-example row location attached');
+    assert.equal(dupExample.location?.row, 2, 'duplicate row number matches');
+    const json = await analyzeItem(textFileItem('data.json', '{"users":[{"email":"a@x.test"}]}', 'application/json'), { signal });
+    const keyEvidence = (json.sections || []).flatMap((section) => section.items).find((entry) => entry.id === 'json-key-0');
+    assert.ok(keyEvidence, 'json top-key evidence present');
+    assert.equal(keyEvidence.location?.type, 'json-path', 'json path location attached');
+    assert.equal(keyEvidence.location?.path, '$.users', 'deterministic json path');
+    const zip = await analyzeItem(await makeZipItem(), { signal });
+    const entryEvidence = (zip.sections || []).flatMap((section) => section.items).find((entry) => entry.id === 'zip-entry-0');
+    assert.ok(entryEvidence, 'zip entry evidence present');
+    assert.equal(entryEvidence.location?.type, 'archive-entry', 'archive entry location attached');
+    assert.ok(entryEvidence.location?.entry && entryEvidence.location.entry.length > 0, 'archive entry path attached');
   }
 
   console.log('Milestone 08 product-polish tests passed.');

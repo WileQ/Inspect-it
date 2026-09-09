@@ -785,6 +785,8 @@ async function runOcr(bytes) {
 }
 
 const WEB_UA = 'Inspect It/1.0.4 (+https://github.com/WileQ/Inspect-it)';
+let webFetchRegistered = false;
+const webDebug = (...args) => { if (process.env.INSPECT_IT_WEB_DEBUG === '1') console.error('[web-debug]', ...args); };
 
 function classifyWebError(error) {
   const cause = (error && error.cause) || error || {};
@@ -801,6 +803,7 @@ function classifyWebError(error) {
 async function fetchWeb(payload) {
   const started = Date.now();
   const raw = typeof payload?.url === 'string' ? payload.url : '';
+  webDebug('request', JSON.stringify({ url: raw, timeoutMs: payload?.timeoutMs }));
   const finish = (outcome) => ({ ...outcome, durationMs: Date.now() - started });
   let url;
   try { url = new URL(raw); } catch { return finish({ ok: false, category: 'unknown', message: 'Invalid URL.', requestedUrl: raw }); }
@@ -841,6 +844,7 @@ async function fetchWeb(payload) {
     }
     const size = Number.isFinite(contentLength) && contentLength > 0 && !truncated ? contentLength : total + (truncated ? 1 : 0);
     const text = Buffer.concat(chunks).toString('utf8');
+    webDebug('ok', JSON.stringify({ url: url.href, status: response.status, finalUrl: response.url || url.href, redirected: response.redirected, durationMs: Date.now() - started, size }));
     return finish({
       ok: true,
       requestedUrl: url.href,
@@ -866,6 +870,8 @@ async function fetchWeb(payload) {
     });
   } catch (error) {
     const classified = classifyWebError(error);
+    const cause = (error && error.cause) || error || {};
+    webDebug('error', JSON.stringify({ url: url.href, category: classified.category, message: classified.message, name: String((error && error.name) || ''), code: String((cause && cause.code) || ''), durationMs: Date.now() - started }));
     return finish({ ok: false, category: classified.category, message: classified.message, requestedUrl: url.href });
   } finally {
     clearTimeout(timer);
@@ -873,7 +879,20 @@ async function fetchWeb(payload) {
 }
 
 function registerWebIpc() {
+  webFetchRegistered = true;
   ipcMain.handle('inspect-it:web-fetch', (_event, payload) => fetchWeb(payload));
+  ipcMain.handle('inspect-it:diagnostics', () => ({
+    electron: process.versions.electron,
+    chrome: process.versions.chrome,
+    node: process.versions.node,
+    processType: 'main',
+    appVersion: app.getVersion(),
+    packaged: app.isPackaged,
+    dirname: __dirname,
+    preloadPath: path.join(__dirname, 'preload.cjs'),
+    impl: 'web-fetch-v1',
+    webFetchRegistered
+  }));
 }
 
 function registerOcrIpc() {

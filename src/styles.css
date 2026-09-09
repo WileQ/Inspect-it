@@ -1507,3 +1507,16 @@ button {
   outline: 2px solid rgba(255, 183, 91, 0.7);
   outline-offset: 1px;
 }
+
+.setting-state {
+  font-style: normal;
+  font-weight: 700;
+  margin-left: 6px;
+  color: #ffcf9d;
+}
+.settings-note {
+  margin: 4px 0 0;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: rgba(235, 221, 198, 0.6);
+}

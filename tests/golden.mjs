@@ -5,6 +5,8 @@
 import assert from 'node:assert/strict';
 import { analyzeItem } from '../src/shared/analyzers.ts';
 import { classifyFetchError } from '../src/shared/web.ts';
+import { runInspection } from '../src/shared/inspection.ts';
+import { loadSettings, saveSettings } from '../src/shared/history.ts';
 import { makeScannedPdfItem, makeOcrTextItem, makePatternPngItem, makeGitFolderItem, makeRichCsvItem, makeComplexCodeItem } from './fixtures.mjs';
 
 const signal = new AbortController().signal;
@@ -23,6 +25,31 @@ function hasFinding(result, id) {
 }
 
 export async function runGoldenTests() {
+  // --- Web Analysis permission: default OFF, zero network when disabled -------
+  {
+    saveSettings({ ...loadSettings(), webAnalysisEnabled: false });
+    assert.equal(Boolean(loadSettings().webAnalysisEnabled), false, 'web analysis defaults to OFF');
+    const local = await analyzeItem(fileItem('local.txt', 'hello\n'), { signal });
+    assert.equal(local.analyzerId, 'text', 'local analysis unaffected while web analysis is OFF');
+    let calls = 0;
+    const prevFetch = globalThis.fetch;
+    const prevWindow = globalThis.window;
+    globalThis.fetch = async () => { calls += 1; throw new Error('network must not be used'); };
+    globalThis.window = undefined;
+    try {
+      const result = await analyzeItem(urlItem('https://example.com/'), { signal });
+      const category = (result.evidence || []).find((entry) => entry.id === 'web-error-category');
+      assert.equal(category?.value, 'web-analysis-disabled', 'disabled mode returns web-analysis-disabled');
+      assert.ok((result.evidence || []).some((entry) => entry.id === 'web-error' && String(entry.value).includes('Enable Web Analysis in Settings')), 'clear enable instruction present');
+      assert.equal(calls, 0, 'disabled URL analysis makes zero network calls');
+    } finally {
+      if (prevFetch === undefined) delete globalThis.fetch; else globalThis.fetch = prevFetch;
+      if (prevWindow === undefined) delete globalThis.window; else globalThis.window = prevWindow;
+    }
+    saveSettings({ ...loadSettings(), webAnalysisEnabled: true });
+    assert.equal(Boolean(loadSettings().webAnalysisEnabled), true, 'enabling persists/reloads');
+  }
+
   // --- Ordinary local objects -------------------------------------------------
   {
     const text = await analyzeItem(fileItem('notes.txt', 'line one\nline two\n'), { signal });
@@ -93,7 +120,31 @@ export async function runGoldenTests() {
       assert.equal(title?.value, 'Quantum ML on lens images', 'title extracted');
       assert.ok((result.evidence || []).some((entry) => entry.id === 'web-status' && entry.value.includes('200')), 'status evidence present');
       assert.ok(!hasFinding(result, 'web-unreachable'), 'reachable page is not reported unreachable');
+      const diagBridgeUsed = (result.evidence || []).find((entry) => entry.id === 'web-diag-bridge-used');
+      assert.equal(diagBridgeUsed?.value, 'true', 'diagnostics show the desktop bridge was used');
+      const runtimeMarker = (result.evidence || []).find((entry) => entry.id === 'web-runtime-marker');
+      assert.equal(runtimeMarker?.value, 'inspect-it-web-runtime-2026-09', 'runtime marker present on live result');
+      assert.equal((result.evidence || []).find((entry) => entry.id === 'web-transport-marker')?.value, 'desktop-bridge-v1', 'transport marker present');
     } finally {
+      if (prev === undefined) delete globalThis.window; else globalThis.window = prev;
+    }
+  }
+
+  // --- Desktop mode with a MISSING web-fetch bridge fails loudly --------------
+  {
+    const prev = globalThis.window;
+    let fetchCalls = 0;
+    const prevFetch = globalThis.fetch;
+    globalThis.fetch = async () => { fetchCalls += 1; throw new Error('should not be called'); };
+    globalThis.window = { inspectItDesktop: { getWindowState: async () => ({}) } };
+    try {
+      const result = await analyzeItem(urlItem('https://pl.wikipedia.org/wiki/Example'), { signal });
+      const category = (result.evidence || []).find((entry) => entry.id === 'web-error-category');
+      assert.equal(category?.value, 'desktop-bridge-unavailable', 'desktop bridge missing is reported specifically');
+      assert.ok((result.evidence || []).some((entry) => entry.id === 'web-error' && String(entry.value).includes('Restart/rebuild')), 'actionable message present');
+      assert.equal(fetchCalls, 0, 'no silent browser-fetch fallback in desktop mode');
+    } finally {
+      if (prevFetch === undefined) delete globalThis.fetch; else globalThis.fetch = prevFetch;
       if (prev === undefined) delete globalThis.window; else globalThis.window = prev;
     }
   }
@@ -136,6 +187,31 @@ export async function runGoldenTests() {
     assert.equal(classifyFetchError({ cause: { code: 'ECONNREFUSED' } }).category, 'connection');
     assert.equal(classifyFetchError({ cause: { code: 'ERR_TLS_CERT_ALTNAME_INVALID' } }).category, 'tls');
     assert.equal(classifyFetchError({ cause: { code: 'ETIMEDOUT' } }).category, 'timeout');
+  }
+
+  // --- URL retries must be fresh (no stale cached failure) --------------------
+  {
+    const noop = () => undefined;
+    let fetchCount = 0;
+    const prevFetch = globalThis.fetch;
+    const html = '<html><head><title>Fresh Site</title></head><body><h1>Hello</h1></body></html>';
+    globalThis.fetch = async () => { fetchCount += 1; return new Response(html, { status: 200, headers: { 'content-type': 'text/html' } }); };
+    const target = urlItem('https://fresh.example.com/page');
+    try {
+      const first = await runInspection({ target, signal, allowCache: false, onProgress: noop, onPartial: noop, onState: noop });
+      assert.ok(fetchCount >= 1, 'first URL analysis performs live fetches');
+      const afterFirst = fetchCount;
+      assert.ok((first.evidence || []).some((entry) => entry.id === 'web-runtime-marker'), 'fresh result carries runtime marker');
+      assert.equal((first.evidence || []).find((entry) => entry.id === 'web-fresh-marker')?.value, 'yes', 'fresh result marked live');
+      const second = await runInspection({ target, signal, allowCache: true, onProgress: noop, onPartial: noop, onState: noop });
+      assert.equal(fetchCount, afterFirst, 'cached reuse does not re-fetch');
+      assert.equal((second.evidence || []).find((entry) => entry.id === 'analysis-cache')?.value.includes('CACHE_HIT'), true, 'cached result is clearly marked CACHE_HIT');
+      const third = await runInspection({ target, signal, allowCache: false, onProgress: noop, onPartial: noop, onState: noop });
+      assert.ok(fetchCount > afterFirst, 'retry with allowCache:false performs a fresh analysis');
+      assert.equal((third.evidence || []).find((entry) => entry.id === 'web-fresh-marker')?.value, 'yes', 'fresh retry marked live');
+    } finally {
+      if (prevFetch === undefined) delete globalThis.fetch; else globalThis.fetch = prevFetch;
+    }
   }
 
   console.log('Golden real-world regression tests passed.');

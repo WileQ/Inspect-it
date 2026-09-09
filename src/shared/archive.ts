@@ -151,7 +151,7 @@ async function analyzeZip(file: InspectionFile, bytes: Uint8Array): Promise<Anal
   ];
   const sections: AnalysisSection[] = [
     { id: 'zip-facts', title: 'Facts', items: evidenceList },
-    { id: 'zip-structure', title: 'Structure', items: limitArray(paths, 15).map((pathValue, index) => evidence(`zip-entry-${index}`, `Entry ${index + 1}`, pathValue)) }
+    { id: 'zip-structure', title: 'Structure', items: limitArray(paths, 15).map((pathValue, index) => { const e = evidence(`zip-entry-${index}`, `Entry ${index + 1}`, pathValue); return { ...e, location: { type: 'archive-entry' as const, label: pathValue, entry: pathValue } }; }) }
   ];
   const unusual: Finding[] = [];
   if (ratio > 10) unusual.push(finding('zip-bomb-risk', 'Large expansion ratio', 'The archive expands much more than it compresses.', 'high', ['zip-ratio']));
@@ -180,7 +180,7 @@ async function analyzeTar(file: InspectionFile, bytes: Uint8Array): Promise<Anal
   ];
   const sections: AnalysisSection[] = [
     { id: 'tar-facts', title: 'Facts', items: evidenceList },
-    { id: 'tar-structure', title: 'Structure', items: limitArray(entries.map((entry) => entry.name), 15).map((value, index) => evidence(`tar-entry-${index}`, `Entry ${index + 1}`, value)) }
+    { id: 'tar-structure', title: 'Structure', items: limitArray(entries.map((entry) => entry.name), 15).map((value, index) => { const e = evidence(`tar-entry-${index}`, `Entry ${index + 1}`, value); return { ...e, location: { type: 'archive-entry' as const, label: value, entry: value } }; }) }
   ];
   const unusual: Finding[] = [];
   if (suspicious > 0) unusual.push(finding('tar-traversal', 'Suspicious paths', 'One or more TAR entries appear to use traversal or absolute paths.', 'high', ['tar-suspicious']));

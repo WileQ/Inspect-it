@@ -8,6 +8,8 @@ export interface RunInspectionOptions {
   onProgress: (progress: ProgressSnapshot) => void;
   onPartial: (result: Partial<AnalysisResult>) => void;
   onState: (session: AnalysisSession) => void;
+  /** Allow returning a cached result. URL submissions set this false so retries always re-fetch. */
+  allowCache?: boolean;
 }
 
 function sessionId(): string {
@@ -18,10 +20,17 @@ export async function runInspection(options: RunInspectionOptions): Promise<Anal
   const target = options.target;
   const fingerprint = await fingerprintItem(target);
   const cacheKey = `${target.kind}:${fingerprint}`;
-  const cached = getCachedResult(cacheKey);
+  const cached = options.allowCache === false ? undefined : getCachedResult(cacheKey);
   if (cached) {
-    options.onPartial(cached);
-    return cached;
+    const cacheEvidence = [
+      { id: 'analysis-cache', label: 'Analysis source', value: 'CACHE_HIT (cached result returned; not re-run)' }
+    ];
+    if (target.kind === 'url') {
+      cacheEvidence.push({ id: 'web-fresh-marker', label: 'Fresh analysis', value: 'no (CACHE_HIT)' });
+    }
+    const marked = { ...cached, evidence: [...cacheEvidence, ...(cached.evidence || [])] };
+    options.onPartial(marked);
+    return marked;
   }
   const session: AnalysisSession = {
     id: sessionId(),

@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('inspectItDesktop', {
   getWindowState: () => ipcRenderer.invoke('inspect-it:get-window-state'),
+  getDiagnostics: () => ipcRenderer.invoke('inspect-it:diagnostics'),
   setExpanded: (value) => ipcRenderer.invoke('inspect-it:set-expanded', value),
   setBounds: (bounds) => ipcRenderer.invoke('inspect-it:set-bounds', bounds),
   focus: () => ipcRenderer.invoke('inspect-it:focus'),

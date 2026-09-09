@@ -1,5 +1,7 @@
 import type { AnalysisResult, AnalysisSection, Evidence, Finding, InspectionUrl } from './types.ts';
 import { digestHex, formatNumber, shortFingerprint } from './utils.ts';
+import { APP_VERSION } from './app-meta.ts';
+import { loadSettings } from './history.ts';
 import {
   evidence,
   ensureNotAborted,
@@ -136,7 +138,7 @@ function parseSecurityTechnologies(outcome: WebFetchOk, html: string): string[] 
 /* restricted sites work. Browser/tests fall back to the global fetch. */
 /* ------------------------------------------------------------------ */
 
-export type WebFetchFailureCategory = 'dns' | 'connection' | 'tls' | 'timeout' | 'redirect' | 'http' | 'aborted' | 'network' | 'unknown';
+export type WebFetchFailureCategory = 'dns' | 'connection' | 'tls' | 'timeout' | 'redirect' | 'http' | 'aborted' | 'network' | 'unknown' | 'desktop-bridge-unavailable' | 'web-analysis-disabled';
 
 export interface WebFetchOk {
   ok: true;
@@ -152,6 +154,7 @@ export interface WebFetchOk {
   text: string;
   durationMs: number;
   /** Minimal security-relevant headers surfaced by the fetch layer. */
+  transport?: 'desktop-bridge' | 'browser-fetch';
   headers?: {
     csp?: string; xfo?: string; hsts?: string; referrer?: string; permissions?: string; nosniff?: string;
     server?: string; xPoweredBy?: string;
@@ -165,6 +168,7 @@ export interface WebFetchError {
   requestedUrl: string;
   status?: number;
   durationMs: number;
+  transport?: 'desktop-bridge' | 'browser-fetch';
 }
 
 export type WebFetchOutcome = WebFetchOk | WebFetchError;
@@ -231,6 +235,7 @@ async function fetchViaGlobal(url: URL, signal: AbortSignal, timeoutMs: number):
       truncated: body.truncated,
       text: body.text,
       durationMs: Date.now() - started,
+      transport: 'browser-fetch' as const,
       headers: {
         csp: response.headers.get('content-security-policy') || undefined,
         xfo: response.headers.get('x-frame-options') || undefined,
@@ -247,32 +252,109 @@ async function fetchViaGlobal(url: URL, signal: AbortSignal, timeoutMs: number):
       throw error;
     }
     const classified = classifyFetchError(error);
-    return { ok: false, category: classified.category, message: classified.message, requestedUrl: url.href, durationMs: Date.now() - started };
+    return { ok: false, category: classified.category, message: classified.message, requestedUrl: url.href, durationMs: Date.now() - started, transport: 'browser-fetch' as const };
   } finally {
     clearTimeout(timeout);
     signal.removeEventListener('abort', abort);
   }
 }
 
+interface RendererEnv {
+  desktopBridgePresent: boolean;
+  webFetchBridgePresent: boolean;
+  appVersion: string;
+  rendererLocation: string;
+  runtime: string;
+  impl: string;
+}
+
+function rendererEnvironment(): RendererEnv {
+  const desktop = typeof window !== 'undefined' && Boolean((window as unknown as { inspectItDesktop?: unknown }).inspectItDesktop);
+  const web = desktop ? (window as unknown as { inspectItDesktop?: { web?: { fetch?: unknown } } }).inspectItDesktop?.web : null;
+  const win = typeof window !== 'undefined' ? (window as unknown as { location?: { href?: string; protocol?: string } }) : undefined;
+  const location = win?.location?.href ?? 'n/a';
+  const protocol = win?.location?.protocol ?? '';
+  return {
+    desktopBridgePresent: desktop,
+    webFetchBridgePresent: Boolean(web && typeof web.fetch === 'function'),
+    appVersion: APP_VERSION,
+    rendererLocation: location,
+    runtime: !win ? 'node' : protocol === 'file:' ? 'packaged-desktop' : desktop ? 'desktop-dev' : 'browser',
+    impl: 'web-fetch-v1'
+  };
+}
+
+const WEB_ANALYZER_RUNTIME_MARKER = 'inspect-it-web-runtime-2026-09';
+
+function webRuntimeEvidence(transport?: 'desktop-bridge' | 'browser-fetch'): Evidence[] {
+  return [
+    evidence('web-runtime-marker', 'Web analyzer runtime', WEB_ANALYZER_RUNTIME_MARKER),
+    evidence('web-transport-marker', 'Transport', transport === 'desktop-bridge' ? 'desktop-bridge-v1' : 'browser-fetch-v1'),
+    evidence('web-fresh-marker', 'Fresh analysis', 'yes')
+  ];
+}
+
+function diagEvidence(transport?: 'desktop-bridge' | 'browser-fetch'): Evidence[] {
+  const env = rendererEnvironment();
+  return [
+    evidence('web-diag-desktop-bridge', 'Desktop bridge present', String(env.desktopBridgePresent)),
+    evidence('web-diag-web-bridge', 'Web-fetch bridge present', String(env.webFetchBridgePresent)),
+    evidence('web-diag-bridge-used', 'Bridge used', String(transport === 'desktop-bridge')),
+    evidence('web-diag-runtime', 'Runtime', env.runtime),
+    evidence('web-diag-app-version', 'App version', env.appVersion),
+    evidence('web-diag-renderer-url', 'Renderer URL', env.rendererLocation),
+    evidence('web-diag-impl', 'Fetch implementation', env.impl)
+  ];
+}
+
 /** Fetch a single page, bounded, with the desktop main-process bridge when present. */
 export async function fetchWebPage(url: URL, signal: AbortSignal, timeoutMs = 10000): Promise<WebFetchOutcome> {
   ensureNotAborted(signal);
+  const env = rendererEnvironment();
   const bridge = desktopWebBridge();
+  const isPrimaryPage = timeoutMs >= 10000;
+  const logCtx = { url: url.href, protocol: url.protocol, ...env, bridgeUsed: Boolean(bridge) };
+  const shouldLog = isPrimaryPage && typeof window !== 'undefined' && Boolean((window as unknown as { location?: unknown }).location);
+  if (shouldLog) console.error('[web-debug] ACTUAL RENDERER FETCH', JSON.stringify(logCtx));
+  if (env.desktopBridgePresent && !bridge) {
+    const error: WebFetchError = {
+      ok: false,
+      category: 'desktop-bridge-unavailable',
+      message: 'Desktop web-fetch bridge unavailable. Restart/rebuild Inspect It.',
+      requestedUrl: url.href,
+      durationMs: 0,
+      transport: 'desktop-bridge'
+    };
+    if (shouldLog) console.error('[web-debug] ACTUAL RENDERER RESULT', JSON.stringify(error));
+    return error;
+  }
   if (bridge) {
     const started = Date.now();
     try {
       const outcome = await bridge.fetch({ url: url.href, timeoutMs });
-      return outcome && typeof outcome.ok === 'boolean' ? outcome : { ok: false, category: 'network', message: 'The fetch bridge returned an invalid response.', requestedUrl: url.href, durationMs: Date.now() - started };
+      if (outcome && typeof outcome.ok === 'boolean') {
+        const tagged = { ...outcome, transport: 'desktop-bridge' as const };
+        if (shouldLog) console.error('[web-debug] ACTUAL RENDERER RESULT', JSON.stringify({ url: url.href, ok: tagged.ok, status: tagged.ok ? tagged.status : undefined, category: tagged.ok ? undefined : tagged.category, finalUrl: tagged.ok ? tagged.finalUrl : undefined, durationMs: tagged.durationMs }));
+        return tagged;
+      }
+      const invalid: WebFetchError = { ok: false, category: 'network', message: 'The fetch bridge returned an invalid response.', requestedUrl: url.href, durationMs: Date.now() - started, transport: 'desktop-bridge' };
+      if (shouldLog) console.error('[web-debug] ACTUAL RENDERER RESULT', JSON.stringify(invalid));
+      return invalid;
     } catch (error) {
       const classified = classifyFetchError(error);
-      return { ok: false, category: classified.category, message: classified.message, requestedUrl: url.href, durationMs: Date.now() - started };
+      const failure: WebFetchError = { ok: false, category: classified.category, message: classified.message, requestedUrl: url.href, durationMs: Date.now() - started, transport: 'desktop-bridge' };
+      if (shouldLog) console.error('[web-debug] ACTUAL RENDERER RESULT', JSON.stringify(failure));
+      return failure;
     }
   }
+  if (shouldLog) console.error('[web-debug] ACTUAL RENDERER RESULT (browser fetch fallback)');
   return fetchViaGlobal(url, signal, timeoutMs);
 }
 
-function webFailureResult(item: InspectionUrl, fingerprint: string, error: WebFetchError): AnalysisResult {
+function webFailureResult(item: InspectionUrl, fingerprint: string, error: WebFetchError, disabled = false): AnalysisResult {
   const evidenceList: Evidence[] = [
+    ...webRuntimeEvidence(error.transport),
+    ...diagEvidence(error.transport),
     evidence('web-url', 'Requested URL', error.requestedUrl),
     evidence('web-error-category', 'Failure category', error.category),
     evidence('web-error', 'Request failed', error.message)
@@ -286,6 +368,9 @@ function webFailureResult(item: InspectionUrl, fingerprint: string, error: WebFe
   const summary = error.status !== undefined
     ? `The server responded with HTTP ${error.status}; content was not analyzed.`
     : error.message;
+  const findingId = disabled ? 'web-analysis-disabled' : 'web-unreachable';
+  const findingTitle = disabled ? 'Web analysis disabled' : 'Website unreachable';
+  const findingSeverity = disabled ? 'medium' : 'high';
   return {
     objectKind: 'url',
     analyzerId: 'web',
@@ -304,7 +389,7 @@ function webFailureResult(item: InspectionUrl, fingerprint: string, error: WebFe
     },
     sections: [{ id: 'web-facts', title: 'Facts', items: evidenceList }],
     important: [],
-    unusual: [finding('web-unreachable', 'Website unreachable', summary, 'high', ['web-error'])],
+    unusual: [finding(findingId, findingTitle, summary, findingSeverity, ['web-error'])],
     recommendations: [],
     evidence: evidenceList,
     progressLabel: 'Website analysis failed',
@@ -332,6 +417,17 @@ export async function analyzeUrlItem(item: InspectionUrl, options: { signal: Abo
     throw new Error('Only http and https URLs can be inspected');
   }
   const fingerprint = await digestHex(new TextEncoder().encode(url.href));
+  const settings = loadSettings();
+  if (!settings.webAnalysisEnabled) {
+    const disabledError: WebFetchError = {
+      ok: false,
+      category: 'web-analysis-disabled',
+      message: 'Web analysis is disabled. Enable Web Analysis in Settings to inspect websites.',
+      requestedUrl: url.href,
+      durationMs: 0
+    };
+    return webFailureResult(item, fingerprint, disabledError, true);
+  }
   const outcome = await fetchWebPage(url, options.signal, 10000);
   if (!outcome.ok) {
     return webFailureResult(item, fingerprint, outcome);
@@ -371,6 +467,8 @@ export async function analyzeUrlItem(item: InspectionUrl, options: { signal: Abo
   const robotsLines = robotsText ? robotsText.split(/\r\n|\n|\r/).filter(Boolean) : [];
   const sitemapEntries = sitemapText ? (parseXml(sitemapText) as Record<string, unknown>) : {};
   const evidenceList: Evidence[] = [
+    ...webRuntimeEvidence(outcome.transport),
+    ...diagEvidence(outcome.transport),
     evidence('web-url', 'Requested URL', outcome.requestedUrl),
     evidence('web-final-url', 'Final URL', outcome.finalUrl !== outcome.requestedUrl ? outcome.finalUrl : 'Same as requested'),
     evidence('web-status', 'HTTP status', `${outcome.status} ${outcome.statusText}`.trim()),
