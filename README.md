@@ -226,15 +226,6 @@ release/             packaged artifacts (gitignored)
 - **Code complexity** is a brace/indent heuristic, not a full AST analysis.
 - **AI interpretations can be wrong.** Local findings remain authoritative.
 
-## Roadmap
-
-- Milestone 01 ? foundation, bubble, popup, core analyzers ? done
-- Milestone 02 ? broad analyzer expansion ? done
-- Milestone 03 ? deep local analysis (anomalies, duplicates, similarity, complexity) ? done
-- Milestone 04 ? optional OpenAI-compatible LLM layer ? done
-- Milestone 05 ? production packaging, identity, privacy, release readiness ? done
-- Future (not yet implemented): additional LLM provider families, richer OCR, AST-based analysis, embeddings/clustering, graph visualization, automatic updates, cloud sync.
-
 ## Contributing
 
 Contributions are welcome. Please:
